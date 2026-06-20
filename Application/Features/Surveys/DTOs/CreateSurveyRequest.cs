@@ -1,16 +1,9 @@
 ﻿using System;
-using GA.Core.Domain.Common;
 
-namespace GA.Core.Domain.Entities
+namespace GA.Application.Features.Surveys.DTOs
 {
-    public class Survey : BaseEntity, IMultiTenant
+    public class CreateSurveyRequest
     {
-        // --- ANKET GENEL BİLGİLERİ ---
-        public string Title { get; set; } = "Periyodik Bakım Servis Formu";
-        public string SubTitle { get; set; } = "Alçak Gerilim Periyodik Kontrol Bakım";
-        public string Status { get; set; } = "Cevap Verildi";
-
-        // --- 28 ADET GÖRSEL SIRA UYUMLU KONTROL SORULARI (EVET=true / HAYIR=false) ---
         public bool Q1_MeterSerialRead { get; set; }
         public bool Q2_PanelCleaning { get; set; }
         public bool Q3_FireExtinguisherPressure { get; set; }
@@ -39,16 +32,6 @@ namespace GA.Core.Domain.Entities
         public bool Q26_AreOsosModemInfosRecorded { get; set; }
         public bool Q27_HasActiveOsosInMeter { get; set; }
         public bool Q28_AreKakrAndToroidValuesAppropriate { get; set; }
-
-        // --- SON ALAN: AÇIKLAMA ---
         public string Description { get; set; } = string.Empty;
-
-        // --- MULTI-TENANT GÜVENLİK SİGORTASI ALANLARI ---
-        public Guid TenantId { get; set; }
-        public Guid? CustomerId { get; set; }
-
-        // 🚀 REVIZYON: IP Üzerinden Gelecek Koordinatları Saklama Alanları
-        public double Latitude { get; set; }
-        public double Longitude { get; set; }
     }
 }

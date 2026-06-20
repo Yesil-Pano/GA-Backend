@@ -3,6 +3,7 @@ using System;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NetTopologySuite.Geometries;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace GA.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260620112003_UpdateWorkOrderRelationsAndPeriodics")]
+    partial class UpdateWorkOrderRelationsAndPeriodics
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -260,116 +263,14 @@ namespace GA.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<Guid?>("CustomerId")
-                        .HasColumnType("uuid");
-
                     b.Property<string>("Description")
-                        .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
-
-                    b.Property<double>("Latitude")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("Longitude")
-                        .HasColumnType("double precision");
-
-                    b.Property<bool>("Q10_GroundingSystemAppropriate")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q11_HasEquipotentialBusbar")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q12_HasInternalLightingAndSocket")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q13_HasWarningLabelsAndInsulatedMat")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q14_FirePreventionSolutionCleaned")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q15_IsOccupationalHealthCompliant")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q16_AreShuntReactorsActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q17_AreCapacitorCurrentsNominal")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q18_HasBlownCapacitor")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q19_HasDefectiveContactor")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q1_MeterSerialRead")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q20_AreCableCrossSectionsAppropriate")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q21_IsThermalCameraImagingDone")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q22_IsModemGprsOnline")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q23_IsRelayPowerFactorOne")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q24_HasRelayScreenWarning")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q25_AreReactiveValuesBelowPenaltyLimit")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q26_AreOsosModemInfosRecorded")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q27_HasActiveOsosInMeter")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q28_AreKakrAndToroidValuesAppropriate")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q2_PanelCleaning")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q3_FireExtinguisherPressure")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q4_MaintenanceFormSigned")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q5_FanWorkingAndSufficient")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q6_HasCoolingFan")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q7_SwitchgearScrewsChecked")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q8_PanelDoorLockable")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("Q9_HasPanelFrameDamage")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("SubTitle")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
 
                     b.Property<string>("Title")
                         .IsRequired()

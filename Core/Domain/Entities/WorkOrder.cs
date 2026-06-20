@@ -3,7 +3,7 @@ using NetTopologySuite.Geometries;
 
 namespace GA.Core.Domain.Entities
 {
-    public class WorkOrder : BaseEntity, IMultiTenant // 🔒 Multi-Tenant zırhı eklendi
+    public class WorkOrder : BaseEntity, IMultiTenant // 🔒 Multi-Tenant zırhı korundu
     {
         public string Title { get; set; } = string.Empty;
         public string CustomerName { get; set; } = string.Empty;
@@ -22,6 +22,11 @@ namespace GA.Core.Domain.Entities
         public Guid? OperationUserId { get; set; }
         public Guid? OpenedByUserId { get; set; }
         public Guid? AssignedToUserId { get; set; }
+
+        // 🔄 REVIZYON 7: PERİYODİK İŞ AÇMA ÖZELLİĞİ ALANLARI
+        public bool IsPeriodic { get; set; } = false; // İş periyodik mi? (Evet/Hayır)
+        public string RecurrenceInterval { get; set; } = "None"; // Tekrarlanma sıklığı: None, Haftalık, Aylık, Yıllık
+        public DateTime? NextExecutionDate { get; set; } // Bir sonraki otomatik oluşturulma tarihi
 
         // 🔒 Şirket Ayrıştırma Alanları
         public Guid TenantId { get; set; }
