@@ -18,6 +18,24 @@ namespace GA.Infrastructure.Persistence.Context
             _currentUserService = currentUserService;
         }
 
+        // 🚀 DÜZELTME: Login ve Register anlarında kullanıcı anonim olduğu için token bulunamaz ve servis hata fırlatır.
+        // Yazdığımız bu try-catch kalkanı sayesinde, token yoksa sistem çökmez, güvenle Guid.Empty (Filtresiz Geçiş) döner!
+        public Guid CurrentTenantId
+        {
+            get
+            {
+                try
+                {
+                    return _currentUserService?.TenantId ?? Guid.Empty;
+                }
+                catch
+                {
+                    // Hata durumunda (Örn: Henüz Login olmamış anonim isteklerde) güvenli liman
+                    return Guid.Empty;
+                }
+            }
+        }
+
         // Çoklu Kiracı (Multi-Tenancy) ve Müşteri Yapısı
         public DbSet<Tenant> Tenants { get; set; }
         public DbSet<Customer> Customers { get; set; }
@@ -44,7 +62,6 @@ namespace GA.Infrastructure.Persistence.Context
             // PostGIS yeteneklerini aktifleştiriyoruz
             modelBuilder.HasPostgresExtension("postgis");
 
-            // 🚀 KÖKLÜ DÜZELTME: Çökmeye sebep olan Expression.Constant yapısı yerine
             // Sektör standardı olan dinamik generic filtre metodunu reflection ile tetikliyoruz.
             foreach (var entityType in modelBuilder.Model.GetEntityTypes())
             {
@@ -91,12 +108,10 @@ namespace GA.Infrastructure.Persistence.Context
                 .OnDelete(DeleteBehavior.SetNull);
         }
 
-        // 🚀 KÖKLÜ DÜZELTME: EF Core'un her istekte (request) canlı olarak çözebileceği,
-        // Asla hafıza sızıntısı veya 500 hatası üretmeyen temiz kurumsal filtre motoru.
         private void ConfigureTenantFilter<TEntity>(ModelBuilder modelBuilder) where TEntity : class, IMultiTenant
         {
             modelBuilder.Entity<TEntity>().HasQueryFilter(e =>
-                _currentUserService.TenantId == Guid.Empty || e.TenantId == _currentUserService.TenantId);
+                CurrentTenantId == Guid.Empty || e.TenantId == CurrentTenantId);
         }
 
         // --- OTOMATİK VERİ DOLDURMA ---

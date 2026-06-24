@@ -29,6 +29,7 @@ namespace GA.Presentation.Controllers
             }
         }
 
+        // 🚀 WEB VE MOBİL ORTAK GİRİŞ KAPISI: Mevcut iş mantığı katmanını (Service) aynen kullanır.
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {

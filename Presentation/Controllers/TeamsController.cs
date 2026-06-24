@@ -2,6 +2,8 @@
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System;
+using System.Linq;
 
 namespace GA.Presentation.Controllers
 {
@@ -73,6 +75,24 @@ namespace GA.Presentation.Controllers
 
             return Ok(new { message = "Ekip başarıyla oluşturuldu!" });
         }
+
+        // 🚀 REVIZYON: Web metodlarını bozmadan, Mobil uygulamanın 7/24 arka plandan tetikleyeceği konum ucu!
+        [HttpPost("update-location")]
+        public IActionResult UpdateLocation([FromBody] UpdateTeamLocationDto dto)
+        {
+            var profile = _context.FieldWorkerProfiles
+                .FirstOrDefault(p => p.UserId == dto.TeamUserId);
+
+            if (profile == null)
+                return NotFound(new { message = "Saha personeli profili bulunamadı." });
+
+            // 📍 TEKNİK UYUMLULUK FIX: Boylam (X) ve Enlem (Y) sırasıyla NetTopologySuite Point nesnesine sarılır.
+            // GetTeams metodu HomeLocation.Y ve X okuduğu için mobil veri attıkça web haritası kendiliğinden canlanır!
+            profile.HomeLocation = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 };
+
+            _context.SaveChanges();
+            return Ok(new { message = "Saha konumu merkeze başarıyla raporlandı." });
+        }
     }
 
     public class CreateTeamDto
@@ -82,5 +102,13 @@ namespace GA.Presentation.Controllers
         public string Project { get; set; } = string.Empty;
         public string Plate { get; set; } = string.Empty;
         public string TeamLeader { get; set; } = string.Empty;
+    }
+
+    // 🚀 REVIZYON DTO: Mobil verileri hatasız taşımak için kurumsal veri kontratı
+    public class UpdateTeamLocationDto
+    {
+        public Guid TeamUserId { get; set; }
+        public double Latitude { get; set; }
+        public double Longitude { get; set; }
     }
 }
