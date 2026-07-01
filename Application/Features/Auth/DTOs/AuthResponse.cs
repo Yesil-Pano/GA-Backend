@@ -3,6 +3,7 @@
     public class AuthResponse
     {
         public required string Token { get; set; }
+        public required string UserId { get; set; }
         public required string Username { get; set; }
         public required string FullName { get; set; }
         // İleride menüyü dinamik çizdirmek için rolleri de buraya ekleyeceğiz

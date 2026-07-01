@@ -87,6 +87,7 @@ namespace GA.Application.Features.Auth
             return new AuthResponse
             {
                 Token = tokenHandler.WriteToken(token),
+                UserId = user.Id.ToString(),
                 Username = user.Username,
                 FullName = user.FullName
             };
