@@ -1,28 +1,36 @@
 ﻿using GA.Application.Features.Auth.DTOs;
 using GA.Core.Domain.Entities;
+using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using NetTopologySuite.Geometries;
 
 namespace GA.Presentation.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize]
     public class WorkOrdersController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        private readonly ICurrentUserService _currentUserService;
 
-        public WorkOrdersController(ApplicationDbContext context)
+        public WorkOrdersController(ApplicationDbContext context, ICurrentUserService currentUserService)
         {
             _context = context;
+            _currentUserService = currentUserService;
         }
 
-        // 1. LİSTELEME UÇ NOKTASI
         [HttpGet]
-        public IActionResult GetWorkOrders()
+        public async Task<IActionResult> GetWorkOrders()
         {
-            var orders = _context.WorkOrders
-                .Where(w => !w.IsDeleted)
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty; // 🚀 VIP KONTROLÜ
+
+            var orders = await _context.WorkOrders
+                .Where(w => !w.IsDeleted && (isSuperAdmin || w.TenantId == tenantId))
                 .Select(w => new {
                     id = w.Id,
                     title = w.Title,
@@ -38,44 +46,43 @@ namespace GA.Presentation.Controllers
                     endDate = w.EndDate.ToString("yyyy-MM-dd HH:mm"),
                     plannedDate = w.StartDate.ToString("yyyy-MM-dd HH:mm"),
                     position = new[] { w.Location.Y, w.Location.X },
-
-                    // 💡 FRONEND'DE FİLTRELEME YAPABİLMEK İÇİN BU ID ALANINI EKLİYORUZ:
                     assignedToUserId = w.AssignedToUserId,
-
-                    operationUserName = _context.Users.Where(u => u.Id == w.OperationUserId).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış",
-                    openedByUserName = _context.Users.Where(u => u.Id == w.OpenedByUserId).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış",
-                    assignedToUserName = _context.Users.Where(u => u.Id == w.AssignedToUserId).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış"
-                }).ToList();
-
+                    operationUserName = _context.Users.Where(u => u.Id == w.OperationUserId && (isSuperAdmin || u.TenantId == tenantId)).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış",
+                    openedByUserName = _context.Users.Where(u => u.Id == w.OpenedByUserId && (isSuperAdmin || u.TenantId == tenantId)).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış",
+                    assignedToUserName = _context.Users.Where(u => u.Id == w.AssignedToUserId && (isSuperAdmin || u.TenantId == tenantId)).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış"
+                }).ToListAsync();
             return Ok(orders);
         }
 
-        // 2. YENİ: DİNAMİK SEÇİM KUTULARINI (COMBOBOX) VERİTABANINDAN DOLDURAN UÇ NOKTA
         [HttpGet("lookups")]
-        public IActionResult GetFormLookups()
+        public async Task<IActionResult> GetFormLookups()
         {
-            // Veritabanındaki gerçek kayıtlı personelleri çekiyoruz (Seçim kutuları için)
-            var systemPersonnel = _context.Users
-                .Where(u => u.IsActive && !u.IsDeleted)
-                .Select(u => new { id = u.Id, fullName = u.FullName })
-                .ToList();
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty; // 🚀 VIP KONTROLÜ
 
-            // Videoda yer alan Teamer listeleri
+            var systemPersonnel = await _context.Users
+                .Where(u => u.IsActive && !u.IsDeleted && (isSuperAdmin || u.TenantId == tenantId))
+                .Select(u => new { id = u.Id, fullName = u.FullName })
+                .ToListAsync();
+
             var workTypes = new[] { "Arıza", "Devreye Alma", "Kontrol" };
             var workCategories = new[] { "Arıza Bildirimi", "YG İşletme Sorumluluğu Talebi", "YG Bakım", "AG Bakım", "Kapasitif Ceza", "QR, Etiket ve Görsel Kontrol" };
 
-            return Ok(new
-            {
-                personnel = systemPersonnel,
-                types = workTypes,
-                categories = workCategories
-            });
+            return Ok(new { personnel = systemPersonnel, types = workTypes, categories = workCategories });
         }
 
-        // 3. KAYDETME UÇ NOKTASI
         [HttpPost]
-        public IActionResult CreateWorkOrder([FromBody] CreateWorkOrderDto dto)
+        public async Task<IActionResult> CreateWorkOrder([FromBody] CreateWorkOrderDto dto)
         {
+            var tenantId = _currentUserService.TenantId;
+            if (tenantId == Guid.Empty) return Unauthorized(new { Message = "Sistem Yöneticileri doğrudan iş emri açamaz, bir firma seçmelidir." });
+
+            if (dto.AssignedToUserId.HasValue)
+            {
+                var isPersonnelValid = await _context.Users.AnyAsync(u => u.Id == dto.AssignedToUserId && u.TenantId == tenantId && !u.IsDeleted);
+                if (!isPersonnelValid) return BadRequest(new { Message = "HATA: Atamaya çalıştığınız personel sizin firmanıza ait değil!" });
+            }
+
             var workOrder = new WorkOrder
             {
                 Title = dto.Title,
@@ -91,12 +98,11 @@ namespace GA.Presentation.Controllers
                 Location = new Point(dto.Longitude, dto.Latitude) { SRID = 4326 },
                 OperationUserId = dto.OperationUserId,
                 OpenedByUserId = dto.OpenedByUserId,
-                AssignedToUserId = dto.AssignedToUserId
+                AssignedToUserId = dto.AssignedToUserId,
+                TenantId = tenantId
             };
-
             _context.WorkOrders.Add(workOrder);
-            _context.SaveChanges();
-
+            await _context.SaveChangesAsync();
             return Ok(new { message = "İş emri başarıyla oluşturuldu!" });
         }
     }

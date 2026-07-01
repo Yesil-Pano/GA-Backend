@@ -1,65 +1,107 @@
-﻿using GA.Core.Domain.Entities;
+﻿using GA.Application.Features.Auth.DTOs;
+using GA.Core.Domain.Entities;
+using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace GA.Presentation.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize]
     public class TeamsController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        private readonly ICurrentUserService _currentUserService;
 
-        public TeamsController(ApplicationDbContext context)
+        public TeamsController(ApplicationDbContext context, ICurrentUserService currentUserService)
         {
             _context = context;
+            _currentUserService = currentUserService;
         }
 
-        // GET: api/teams
         [HttpGet]
-        public IActionResult GetTeams()
+        public async Task<IActionResult> GetTeams()
         {
-            // 💡 Sadece giriş yapmış şirketin ekipleri otomatik süzülerek gelir!
-            var teams = _context.Users
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            var teams = await _context.Users
                 .Include(u => u.FieldWorkerProfile)
-                .Where(u => u.FieldWorkerProfile != null && !u.IsDeleted)
+                    .ThenInclude(f => f!.Projects)
+                .Where(u => (isSuperAdmin || u.TenantId == tenantId) && u.FieldWorkerProfile != null && !u.IsDeleted)
                 .Select(u => new {
                     id = u.Id,
                     name = u.FullName,
+                    username = u.Username,
+                    email = u.Email,
                     phone = u.PhoneNumber,
-                    project = u.FieldWorkerProfile!.ProjectName ?? "-",
+                    project = u.FieldWorkerProfile!.Projects.Any()
+                        ? string.Join(", ", u.FieldWorkerProfile.Projects.Select(p => p.Name))
+                        : (u.FieldWorkerProfile.ProjectName ?? "-"),
+                    projectIds = u.FieldWorkerProfile.Projects.Select(p => p.Id).ToList(),
                     plate = u.FieldWorkerProfile!.VehiclePlate ?? "-",
                     teamLeader = u.FieldWorkerProfile!.TeamLeader ?? "-",
                     position = u.FieldWorkerProfile!.HomeLocation != null
                         ? new[] { u.FieldWorkerProfile.HomeLocation.Y, u.FieldWorkerProfile.HomeLocation.X }
-                        : new[] { 39.92077, 32.85411 } // Ankara default
-                }).ToList();
+                        : new[] { 39.92077, 32.85411 }
+                }).ToListAsync();
 
             return Ok(teams);
         }
 
-        // POST: api/teams
-        [HttpPost]
-        public IActionResult CreateTeam([FromBody] CreateTeamDto dto)
+        [HttpGet("lookups")]
+        public async Task<IActionResult> GetTeamsLookups()
         {
-            string safeName = dto.Name.ToLower().Replace(" ", ".");
-            string generatedEmail = $"{safeName}_{Guid.NewGuid().ToString().Substring(0, 4)}@teamer.local";
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            var projects = await _context.Projects
+                .IgnoreQueryFilters()
+                .Where(p => !p.IsDeleted && (isSuperAdmin || p.TenantId == tenantId))
+                .Select(p => new { p.Id, p.Name })
+                .ToListAsync();
+
+            return Ok(projects);
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> CreateTeam([FromBody] CreateTeamDto dto)
+        {
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            Guid targetTenantId = tenantId;
+            if (isSuperAdmin)
+            {
+                if (!dto.TenantId.HasValue || dto.TenantId == Guid.Empty)
+                    return BadRequest(new { Message = "Super Admin olarak bir hedef firma seçmek zorundasınız!" });
+
+                targetTenantId = dto.TenantId.Value;
+            }
+
+            var exists = await _context.Users.IgnoreQueryFilters().AnyAsync(u => u.Email == dto.Email || u.Username == dto.Username);
+            if (exists) return BadRequest(new { Message = "Bu e-posta adresi veya kullanıcı adı zaten sistemde kayıtlı!" });
 
             var user = new User
             {
-                Username = $"{safeName}_{Guid.NewGuid().ToString().Substring(0, 4)}",
-                Email = generatedEmail,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword("Teamer123!"), // Varsayılan kurumsal giriş şifresi
+                Username = dto.Username,
+                Email = dto.Email,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
                 FullName = dto.Name,
                 PhoneNumber = dto.Phone,
-                IsActive = true
+                IsActive = true,
+                TenantId = targetTenantId
             };
 
             _context.Users.Add(user);
-            _context.SaveChanges(); // DB tetiklenir, SaveChangesAsync override kimliği basar.
+            await _context.SaveChangesAsync();
 
             var profile = new FieldWorkerProfile
             {
@@ -67,48 +109,101 @@ namespace GA.Presentation.Controllers
                 ProjectName = dto.Project,
                 VehiclePlate = dto.Plate,
                 TeamLeader = dto.TeamLeader,
-                HomeLocation = new NetTopologySuite.Geometries.Point(32.85411, 39.92077) { SRID = 4326 }
+                // 🚀 HARİTA ÇÖZÜMÜ: Formdan gelen dinamik koordinatlar mühürleniyor (X: Lng, Y: Lat)
+                HomeLocation = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 }
             };
 
+            if (dto.ProjectIds != null && dto.ProjectIds.Any())
+            {
+                var selectedProjects = await _context.Projects
+                    .IgnoreQueryFilters()
+                    .Where(p => dto.ProjectIds.Contains(p.Id))
+                    .ToListAsync();
+
+                foreach (var project in selectedProjects)
+                {
+                    profile.Projects.Add(project);
+                }
+            }
+
             _context.FieldWorkerProfiles.Add(profile);
-            _context.SaveChanges();
+            await _context.SaveChangesAsync();
 
             return Ok(new { message = "Ekip başarıyla oluşturuldu!" });
         }
 
-        // 🚀 REVIZYON: Web metodlarını bozmadan, Mobil uygulamanın 7/24 arka plandan tetikleyeceği konum ucu!
-        [HttpPost("update-location")]
-        public IActionResult UpdateLocation([FromBody] UpdateTeamLocationDto dto)
+        [HttpPut("{id}")]
+        public async Task<IActionResult> UpdateTeam(Guid id, [FromBody] UpdateTeamDto dto)
         {
-            var profile = _context.FieldWorkerProfiles
-                .FirstOrDefault(p => p.UserId == dto.TeamUserId);
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
 
-            if (profile == null)
-                return NotFound(new { message = "Saha personeli profili bulunamadı." });
+            var user = await _context.Users
+                .IgnoreQueryFilters()
+                .Include(u => u.FieldWorkerProfile)
+                    .ThenInclude(f => f!.Projects)
+                .FirstOrDefaultAsync(u => u.Id == id && !u.IsDeleted && (isSuperAdmin || u.TenantId == tenantId));
 
-            // 📍 TEKNİK UYUMLULUK FIX: Boylam (X) ve Enlem (Y) sırasıyla NetTopologySuite Point nesnesine sarılır.
-            // GetTeams metodu HomeLocation.Y ve X okuduğu için mobil veri attıkça web haritası kendiliğinden canlanır!
+            if (user == null)
+                return NotFound(new { Message = "Güncellenmek istenen ekip üyesi bulunamadı veya yetkiniz yetersiz." });
+
+            var exists = await _context.Users.IgnoreQueryFilters().AnyAsync(u => u.Id != id && (u.Email == dto.Email || u.Username == dto.Username));
+            if (exists) return BadRequest(new { Message = "Bu e-posta veya kullanıcı adı başka bir personele aittir!" });
+
+            user.FullName = dto.Name;
+            user.PhoneNumber = dto.Phone;
+            user.Username = dto.Username;
+            user.Email = dto.Email;
+
+            if (!string.IsNullOrWhiteSpace(dto.Password))
+            {
+                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
+            }
+
+            user.UpdatedAt = DateTime.UtcNow;
+
+            if (user.FieldWorkerProfile != null)
+            {
+                user.FieldWorkerProfile.VehiclePlate = dto.Plate;
+                user.FieldWorkerProfile.TeamLeader = dto.TeamLeader;
+                // 🚀 HARİTA ÇÖZÜMÜ: Düzenleme ekranından gelen konumları güncelliyoruz
+                user.FieldWorkerProfile.HomeLocation = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 };
+                user.FieldWorkerProfile.UpdatedAt = DateTime.UtcNow;
+
+                user.FieldWorkerProfile.Projects.Clear();
+                if (dto.ProjectIds != null && dto.ProjectIds.Any())
+                {
+                    var selectedProjects = await _context.Projects
+                        .IgnoreQueryFilters()
+                        .Where(p => dto.ProjectIds.Contains(p.Id))
+                        .ToListAsync();
+
+                    foreach (var project in selectedProjects)
+                    {
+                        user.FieldWorkerProfile.Projects.Add(project);
+                    }
+                }
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { Message = "Ekip bilgileri kurumsal standartlarda başarıyla güncellendi!" });
+        }
+
+        [HttpPost("update-location")]
+        public async Task<IActionResult> UpdateLocation([FromBody] UpdateTeamLocationDto dto)
+        {
+            var tenantId = _currentUserService.TenantId;
+            if (tenantId == Guid.Empty) return Unauthorized();
+
+            var profile = await _context.FieldWorkerProfiles
+                .Include(p => p.User)
+                .FirstOrDefaultAsync(p => p.UserId == dto.TeamUserId && p.User.TenantId == tenantId);
+
+            if (profile == null) return NotFound(new { message = "Saha personeli profili bulunamadı." });
+
             profile.HomeLocation = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 };
-
-            _context.SaveChanges();
+            await _context.SaveChangesAsync();
             return Ok(new { message = "Saha konumu merkeze başarıyla raporlandı." });
         }
-    }
-
-    public class CreateTeamDto
-    {
-        public string Name { get; set; } = string.Empty;
-        public string Phone { get; set; } = string.Empty;
-        public string Project { get; set; } = string.Empty;
-        public string Plate { get; set; } = string.Empty;
-        public string TeamLeader { get; set; } = string.Empty;
-    }
-
-    // 🚀 REVIZYON DTO: Mobil verileri hatasız taşımak için kurumsal veri kontratı
-    public class UpdateTeamLocationDto
-    {
-        public Guid TeamUserId { get; set; }
-        public double Latitude { get; set; }
-        public double Longitude { get; set; }
     }
 }

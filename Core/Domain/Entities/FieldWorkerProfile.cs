@@ -17,5 +17,7 @@ namespace GA.Core.Domain.Entities
         // 🔒 Şirket Ayrıştırma Alanları
         public Guid TenantId { get; set; }
         public Guid? CustomerId { get; set; }
+
+        public ICollection<Project> Projects { get; set; } = new List<Project>();
     }
 }
