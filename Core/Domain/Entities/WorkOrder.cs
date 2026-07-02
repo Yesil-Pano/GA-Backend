@@ -24,9 +24,14 @@ namespace GA.Core.Domain.Entities
         public Guid? AssignedToUserId { get; set; }
 
         // 🔄 REVIZYON 7: PERİYODİK İŞ AÇMA ÖZELLİĞİ ALANLARI
-        public bool IsPeriodic { get; set; } = false; // İş periyodik mi? (Evet/Hayır)
-        public string RecurrenceInterval { get; set; } = "None"; // Tekrarlanma sıklığı: None, Haftalık, Aylık, Yıllık
-        public DateTime? NextExecutionDate { get; set; } // Bir sonraki otomatik oluşturulma tarihi
+        public bool IsPeriodic { get; set; } = false;
+        public string RecurrenceInterval { get; set; } = "None";
+        public DateTime? NextExecutionDate { get; set; }
+
+        // Durum geçiş zaman damgaları (saniye hassasiyetinde UTC)
+        public DateTime? StartedAt { get; set; }
+        public DateTime? CompletedAt { get; set; }
+        public DateTime? CancelledAt { get; set; }
 
         // 🔒 Şirket Ayrıştırma Alanları
         public Guid TenantId { get; set; }

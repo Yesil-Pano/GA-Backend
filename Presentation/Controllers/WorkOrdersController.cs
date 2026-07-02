@@ -49,7 +49,10 @@ namespace GA.Presentation.Controllers
                     assignedToUserId = w.AssignedToUserId,
                     operationUserName = _context.Users.Where(u => u.Id == w.OperationUserId && (isSuperAdmin || u.TenantId == tenantId)).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış",
                     openedByUserName = _context.Users.Where(u => u.Id == w.OpenedByUserId && (isSuperAdmin || u.TenantId == tenantId)).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış",
-                    assignedToUserName = _context.Users.Where(u => u.Id == w.AssignedToUserId && (isSuperAdmin || u.TenantId == tenantId)).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış"
+                    assignedToUserName = _context.Users.Where(u => u.Id == w.AssignedToUserId && (isSuperAdmin || u.TenantId == tenantId)).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış",
+                    startedAt   = w.StartedAt,
+                    completedAt = w.CompletedAt,
+                    cancelledAt = w.CancelledAt,
                 }).ToListAsync();
             return Ok(orders);
         }
@@ -104,6 +107,54 @@ namespace GA.Presentation.Controllers
             _context.WorkOrders.Add(workOrder);
             await _context.SaveChangesAsync();
             return Ok(new { message = "İş emri başarıyla oluşturuldu!" });
+        }
+
+        /// <summary>
+        /// Mobil uygulamadan iş emri durumunu günceller.
+        /// Geçerli geçişler: Bekliyor → Devam Ediyor | Bekliyor/Devam Ediyor → Tamamlandı | İptal
+        /// PATCH /api/workorders/{id}/status
+        /// </summary>
+        [HttpPatch("{id}/status")]
+        public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UpdateWorkOrderStatusDto dto)
+        {
+            var tenantId = _currentUserService.TenantId;
+            var userId   = _currentUserService.UserId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            var workOrder = await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted);
+
+            if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
+            if (!isSuperAdmin && workOrder.TenantId != tenantId) return Forbid();
+
+            // Sadece atanan kişi veya admin güncelleyebilir
+            if (!isSuperAdmin && workOrder.AssignedToUserId != userId)
+                return StatusCode(403, new { message = "Bu iş emrini yalnızca atanan kişi güncelleyebilir." });
+
+            // Geçerli durum geçişleri
+            var validTransitions = new Dictionary<string, string[]>
+            {
+                { "Bekliyor",     new[] { "Devam Ediyor", "İptal" } },
+                { "Devam Ediyor", new[] { "Tamamlandı",   "İptal" } },
+            };
+
+            if (!validTransitions.TryGetValue(workOrder.Status, out var allowed) || !allowed.Contains(dto.Status))
+                return BadRequest(new { message = $"'{workOrder.Status}' → '{dto.Status}' geçişi geçersiz." });
+
+            workOrder.Status    = dto.Status;
+            workOrder.UpdatedAt = DateTime.UtcNow;
+
+            switch (dto.Status)
+            {
+                case "Devam Ediyor": workOrder.StartedAt   = DateTime.UtcNow; break;
+                case "Tamamlandı":   workOrder.CompletedAt = DateTime.UtcNow; break;
+                case "İptal":        workOrder.CancelledAt = DateTime.UtcNow; break;
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Durum güncellendi.", status = workOrder.Status });
         }
     }
 }

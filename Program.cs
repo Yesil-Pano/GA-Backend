@@ -1,5 +1,7 @@
 using GA.Application.Features.Auth;
+using GA.Application.Features.Location;
 using GA.Core.Interfaces;
+using GA.Infrastructure.Hubs;
 using GA.Infrastructure.Persistence.Context;
 using GA.Infrastructure.Persistence.Repositories;
 using GA.Infrastructure.Services;
@@ -10,19 +12,23 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// PostgreSQL ve NetTopologySuite (Harita) Entegrasyonu
+// PostgreSQL + NetTopologySuite
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"),
         o => o.UseNetTopologySuite()));
 
-// DI Konfigürasyonu
+// DI
 builder.Services.AddOpenApi();
 builder.Services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<ILocationService, LocationService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 
-// JWT Konfigürasyonu
+// SignalR — gerçek zamanlı konum yayını için
+builder.Services.AddSignalR();
+
+// JWT
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
 var secretKey = Encoding.UTF8.GetBytes(jwtSettings["SecretKey"]!);
 
@@ -42,6 +48,21 @@ builder.Services.AddAuthentication(options =>
         ValidAudience = jwtSettings["Audience"],
         IssuerSigningKey = new SymmetricSecurityKey(secretKey)
     };
+
+    // SignalR WebSocket bağlantıları JWT'yi query string ile gönderir
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"];
+            var path = context.HttpContext.Request.Path;
+            if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs/location"))
+            {
+                context.Token = accessToken;
+            }
+            return Task.CompletedTask;
+        }
+    };
 });
 
 builder.Services.AddEndpointsApiExplorer();
@@ -49,21 +70,19 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddControllers();
 
-// Uygulamaya CORS politikası ekliyoruz
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:3000", "http://localhost:5173", "http://localhost:5112") // Vite'in varsayılan portları
+        policy.WithOrigins("http://localhost:3000", "http://localhost:5173", "http://localhost:5112")
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials(); // Eğer Cookie/Token tabanlı auth yapacaksanız gereklidir
+              .AllowCredentials();
     });
 });
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
@@ -71,14 +90,14 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// HTTPS yönlendirmesini yerel testler için geçici olarak kapatıyoruz
 // app.UseHttpsRedirection();
 
 app.UseCors("AllowFrontend");
-
-app.UseAuthentication(); // Önce kimlik doğrulanır
-app.UseAuthorization();  // Sonra yetki kontrol edilir
-
+app.UseAuthentication();
+app.UseAuthorization();
 app.MapControllers();
+
+// SignalR hub endpoint
+app.MapHub<LocationHub>("/hubs/location");
 
 app.Run();
