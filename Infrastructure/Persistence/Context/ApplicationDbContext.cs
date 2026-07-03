@@ -54,7 +54,8 @@ namespace GA.Infrastructure.Persistence.Context
         public DbSet<Timesheet> Timesheets { get; set; } = null!;
         public DbSet<WorkOrder> WorkOrders { get; set; } = null!;
         public DbSet<Station> Stations { get; set; } = null!;
-        public DbSet<Project> Projects { get; set; } = null!; // 🚀 Yeni projesel SaaS tablomuz
+        public DbSet<Project> Projects { get; set; } = null!;
+        public DbSet<Photo> Photos { get; set; } = null!;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

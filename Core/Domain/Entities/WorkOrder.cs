@@ -33,6 +33,10 @@ namespace GA.Core.Domain.Entities
         public DateTime? CompletedAt { get; set; }
         public DateTime? CancelledAt { get; set; }
 
+        // Saha notu (mobil/sahadan eklenen yorum)
+        public string? FieldNote { get; set; }
+        public DateTime? FieldNoteAddedAt { get; set; }
+
         // 🔒 Şirket Ayrıştırma Alanları
         public Guid TenantId { get; set; }
         public Guid? CustomerId { get; set; }

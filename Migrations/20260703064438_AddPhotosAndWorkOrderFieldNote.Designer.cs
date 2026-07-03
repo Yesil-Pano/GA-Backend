@@ -3,6 +3,7 @@ using System;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NetTopologySuite.Geometries;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace GA.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260703064438_AddPhotosAndWorkOrderFieldNote")]
+    partial class AddPhotosAndWorkOrderFieldNote
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -276,9 +279,6 @@ namespace GA.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("ChargepointId")
-                        .HasColumnType("text");
-
                     b.Property<string>("City")
                         .IsRequired()
                         .HasColumnType("text");
@@ -289,21 +289,9 @@ namespace GA.Migrations
                     b.Property<Guid?>("CustomerId")
                         .HasColumnType("uuid");
 
-                    b.Property<string>("DevicePower")
-                        .HasColumnType("text");
-
-                    b.Property<string>("DeviceVendor")
-                        .HasColumnType("text");
-
-                    b.Property<string>("District")
-                        .HasColumnType("text");
-
                     b.Property<string>("Edas")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<DateTime?>("EstimatedDate")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("GeneralFilePath")
                         .HasColumnType("text");
@@ -317,12 +305,6 @@ namespace GA.Migrations
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("OwnerCompany")
-                        .HasColumnType("text");
-
-                    b.Property<string>("PartnerStatus")
                         .HasColumnType("text");
 
                     b.Property<string>("PersonnelName")
@@ -344,9 +326,6 @@ namespace GA.Migrations
                     b.Property<string>("SabitFotograflarPath")
                         .HasColumnType("text");
 
-                    b.Property<int?>("SocketCount")
-                        .HasColumnType("integer");
-
                     b.Property<string>("StatusType")
                         .IsRequired()
                         .HasColumnType("text");
@@ -356,9 +335,6 @@ namespace GA.Migrations
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("VendorModel")
-                        .HasColumnType("text");
 
                     b.Property<string>("YgIsletmeBelgesiPath")
                         .HasColumnType("text");

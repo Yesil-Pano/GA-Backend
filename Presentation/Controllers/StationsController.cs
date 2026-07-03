@@ -17,6 +17,10 @@ namespace GA.Presentation.Controllers
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
 
+        // 🚀 B2B FİRMA KİMLİKLERİ
+        private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
+        private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
+
         public StationsController(ApplicationDbContext context, ICurrentUserService currentUserService)
         {
             _context = context;
@@ -27,31 +31,63 @@ namespace GA.Presentation.Controllers
         public async Task<IActionResult> GetStations()
         {
             var tenantId = _currentUserService.TenantId;
-            var isSuperAdmin = tenantId == Guid.Empty; // 🚀 VIP KONTROLÜ
+            var isSuperAdmin = tenantId == Guid.Empty;
 
             var stations = await _context.Stations
-                .Where(s => !s.IsDeleted && (isSuperAdmin || s.TenantId == tenantId))
+                .IgnoreQueryFilters() // 🚀 Zırhı geçici olarak indiriyoruz
+                .Where(s => !s.IsDeleted &&
+                            (isSuperAdmin ||
+                             s.TenantId == tenantId ||
+                             (tenantId == _trugoTenantId && s.TenantId == _yesilPanoTenantId))) // 🚀 TRUGO, Yeşil Pano istasyonlarını görebilir
                 .Select(s => new {
                     id = s.Id,
                     name = s.Name,
                     statusType = s.StatusType,
-                    powerType = s.PowerType,
-                    personnelName = s.PersonnelName,
-                    personnelPhone = s.PersonnelPhone,
-                    edas = s.Edas,
-                    address = s.Address,
-                    pointType = s.PointType,
                     city = s.City,
-                    generalFilePath = s.GeneralFilePath ?? "Yüklenmedi",
-                    ygTescilBelgesiPath = s.YgTescilBelgesiPath ?? "Yüklenmedi",
-                    ygSozlesmesiPath = s.YgSozlesmesiPath ?? "Yüklenmedi",
-                    sabitFotograflarPath = s.SabitFotograflarPath ?? "Yüklenmedi",
-                    yillikBakimFormuPath = s.YillikBakimFormuPath ?? "Yüklenmedi",
-                    ygIsletmeBelgesiPath = s.YgIsletmeBelgesiPath ?? "Yüklenmedi",
                     position = new[] { s.Location.Y, s.Location.X }
                 }).ToListAsync();
 
             return Ok(stations);
+        }
+
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetStationDetails(Guid id)
+        {
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            var station = await _context.Stations
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(s => s.Id == id && !s.IsDeleted &&
+                                          (isSuperAdmin ||
+                                           s.TenantId == tenantId ||
+                                           (tenantId == _trugoTenantId && s.TenantId == _yesilPanoTenantId)));
+
+            if (station == null) return NotFound();
+
+            return Ok(new
+            {
+                id = station.Id,
+                name = station.Name,
+                statusType = station.StatusType,
+                powerType = station.PowerType,
+                personnelName = station.PersonnelName,
+                personnelPhone = station.PersonnelPhone,
+                edas = station.Edas,
+                address = station.Address,
+                pointType = station.PointType,
+                city = station.City,
+                chargepointId = station.ChargepointId,
+                deviceVendor = station.DeviceVendor,
+                vendorModel = station.VendorModel,
+                socketCount = station.SocketCount,
+                devicePower = station.DevicePower,
+                district = station.District,
+                partnerStatus = station.PartnerStatus,
+                ownerCompany = station.OwnerCompany,
+                estimatedDate = station.EstimatedDate,
+                position = new[] { station.Location.Y, station.Location.X }
+            });
         }
 
         [HttpPost]
