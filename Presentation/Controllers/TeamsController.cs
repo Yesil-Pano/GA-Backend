@@ -19,7 +19,6 @@ namespace GA.Presentation.Controllers
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
 
-        // 🚀 B2B FİRMA KİMLİKLERİ
         private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
         private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
 
@@ -36,25 +35,31 @@ namespace GA.Presentation.Controllers
             var isSuperAdmin = tenantId == Guid.Empty;
 
             var teams = await _context.Users
-                .IgnoreQueryFilters() // 🚀 Zırhı geçici olarak indiriyoruz
+                .IgnoreQueryFilters()
                 .Include(u => u.FieldWorkerProfile)
                     .ThenInclude(f => f!.Projects)
                 .Where(u => !u.IsDeleted && u.FieldWorkerProfile != null &&
-                            (isSuperAdmin || 
-                             u.TenantId == tenantId || 
-                             (tenantId == _trugoTenantId && u.TenantId == _yesilPanoTenantId))) // 🚀 TRUGO, Yeşil Pano'yu Görebilir!
+                            (isSuperAdmin ||
+                             u.TenantId == tenantId ||
+                             (tenantId == _trugoTenantId && u.TenantId == _yesilPanoTenantId)))
                 .Select(u => new {
                     id = u.Id,
                     name = u.FullName,
-                    username = u.Username, 
-                    email = u.Email,       
+                    username = u.Username,
+                    email = u.Email,
                     phone = u.PhoneNumber,
-                    project = u.FieldWorkerProfile!.Projects.Any() 
-                        ? string.Join(", ", u.FieldWorkerProfile.Projects.Select(p => p.Name)) 
+                    project = u.FieldWorkerProfile!.Projects.Any()
+                        ? string.Join(", ", u.FieldWorkerProfile.Projects.Select(p => p.Name))
                         : (u.FieldWorkerProfile.ProjectName ?? "-"),
                     projectIds = u.FieldWorkerProfile.Projects.Select(p => p.Id).ToList(),
                     plate = u.FieldWorkerProfile!.VehiclePlate ?? "-",
                     teamLeader = u.FieldWorkerProfile!.TeamLeader ?? "-",
+
+                    // 🚀 YENİ EKLENEN ADRES VE BÖLGE ALANLARI
+                    address = u.FieldWorkerProfile!.Address ?? "-",
+                    city = u.FieldWorkerProfile!.City ?? "-",
+                    district = u.FieldWorkerProfile!.District ?? "-",
+
                     position = u.FieldWorkerProfile!.HomeLocation != null
                         ? new[] { u.FieldWorkerProfile.HomeLocation.Y, u.FieldWorkerProfile.HomeLocation.X }
                         : new[] { 39.92077, 32.85411 }
@@ -71,9 +76,9 @@ namespace GA.Presentation.Controllers
 
             var projects = await _context.Projects
                 .IgnoreQueryFilters()
-                .Where(p => !p.IsDeleted && 
-                            (isSuperAdmin || 
-                             p.TenantId == tenantId || 
+                .Where(p => !p.IsDeleted &&
+                            (isSuperAdmin ||
+                             p.TenantId == tenantId ||
                              (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId)))
                 .Select(p => new { p.Id, p.Name })
                 .ToListAsync();
@@ -92,7 +97,7 @@ namespace GA.Presentation.Controllers
             {
                 if (!dto.TenantId.HasValue || dto.TenantId == Guid.Empty)
                     return BadRequest(new { Message = "Super Admin olarak bir hedef firma seçmek zorundasınız!" });
-                
+
                 targetTenantId = dto.TenantId.Value;
             }
 
@@ -101,9 +106,9 @@ namespace GA.Presentation.Controllers
 
             var user = new User
             {
-                Username = dto.Username,     
-                Email = dto.Email,           
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password), 
+                Username = dto.Username,
+                Email = dto.Email,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
                 FullName = dto.Name,
                 PhoneNumber = dto.Phone,
                 IsActive = true,
@@ -116,9 +121,13 @@ namespace GA.Presentation.Controllers
             var profile = new FieldWorkerProfile
             {
                 UserId = user.Id,
-                ProjectName = dto.Project, 
+                ProjectName = dto.Project,
                 VehiclePlate = dto.Plate,
                 TeamLeader = dto.TeamLeader,
+                // 🚀 YENİ ALANLAR KAYDEDİLİYOR
+                Address = dto.Address,
+                City = dto.City,
+                District = dto.District,
                 HomeLocation = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 }
             };
 
@@ -151,9 +160,9 @@ namespace GA.Presentation.Controllers
                 .IgnoreQueryFilters()
                 .Include(u => u.FieldWorkerProfile)
                     .ThenInclude(f => f!.Projects)
-                .FirstOrDefaultAsync(u => u.Id == id && !u.IsDeleted && 
-                                          (isSuperAdmin || 
-                                           u.TenantId == tenantId || 
+                .FirstOrDefaultAsync(u => u.Id == id && !u.IsDeleted &&
+                                          (isSuperAdmin ||
+                                           u.TenantId == tenantId ||
                                            (tenantId == _trugoTenantId && u.TenantId == _yesilPanoTenantId)));
 
             if (user == null)
@@ -164,9 +173,9 @@ namespace GA.Presentation.Controllers
 
             user.FullName = dto.Name;
             user.PhoneNumber = dto.Phone;
-            user.Username = dto.Username; 
-            user.Email = dto.Email;       
-            
+            user.Username = dto.Username;
+            user.Email = dto.Email;
+
             if (!string.IsNullOrWhiteSpace(dto.Password))
             {
                 user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
@@ -178,6 +187,11 @@ namespace GA.Presentation.Controllers
             {
                 user.FieldWorkerProfile.VehiclePlate = dto.Plate;
                 user.FieldWorkerProfile.TeamLeader = dto.TeamLeader;
+                // 🚀 YENİ ALANLAR GÜNCELLENİYOR
+                user.FieldWorkerProfile.Address = dto.Address;
+                user.FieldWorkerProfile.City = dto.City;
+                user.FieldWorkerProfile.District = dto.District;
+
                 user.FieldWorkerProfile.HomeLocation = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 };
                 user.FieldWorkerProfile.UpdatedAt = DateTime.UtcNow;
 
@@ -209,8 +223,8 @@ namespace GA.Presentation.Controllers
             var profile = await _context.FieldWorkerProfiles
                 .IgnoreQueryFilters()
                 .Include(p => p.User)
-                .FirstOrDefaultAsync(p => p.UserId == dto.TeamUserId && 
-                                          (p.User.TenantId == tenantId || 
+                .FirstOrDefaultAsync(p => p.UserId == dto.TeamUserId &&
+                                          (p.User.TenantId == tenantId ||
                                            (tenantId == _trugoTenantId && p.User.TenantId == _yesilPanoTenantId)));
 
             if (profile == null) return NotFound(new { message = "Saha personeli profili bulunamadı." });
@@ -224,15 +238,21 @@ namespace GA.Presentation.Controllers
     public class CreateTeamDto
     {
         public string Name { get; set; } = string.Empty;
-        public string Username { get; set; } = string.Empty; 
-        public string Email { get; set; } = string.Empty;    
-        public string Password { get; set; } = string.Empty; 
+        public string Username { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
         public string Phone { get; set; } = string.Empty;
         public string Project { get; set; } = string.Empty;
         public string Plate { get; set; } = string.Empty;
         public string TeamLeader { get; set; } = string.Empty;
+
+        // 🚀 DTO'YA YENİ ALANLAR EKLENDİ
+        public string Address { get; set; } = string.Empty;
+        public string City { get; set; } = string.Empty;
+        public string District { get; set; } = string.Empty;
+
         public List<Guid> ProjectIds { get; set; } = new List<Guid>();
-        public Guid? TenantId { get; set; } 
+        public Guid? TenantId { get; set; }
         public double Latitude { get; set; } = 39.92077;
         public double Longitude { get; set; } = 32.85411;
     }
@@ -240,12 +260,18 @@ namespace GA.Presentation.Controllers
     public class UpdateTeamDto
     {
         public string Name { get; set; } = string.Empty;
-        public string Username { get; set; } = string.Empty; 
-        public string Email { get; set; } = string.Empty;    
-        public string? Password { get; set; } 
+        public string Username { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string? Password { get; set; }
         public string Phone { get; set; } = string.Empty;
         public string Plate { get; set; } = string.Empty;
         public string TeamLeader { get; set; } = string.Empty;
+
+        // 🚀 DTO'YA YENİ ALANLAR EKLENDİ
+        public string Address { get; set; } = string.Empty;
+        public string City { get; set; } = string.Empty;
+        public string District { get; set; } = string.Empty;
+
         public List<Guid> ProjectIds { get; set; } = new List<Guid>();
         public double Latitude { get; set; }
         public double Longitude { get; set; }

@@ -51,57 +51,91 @@ namespace GA.Presentation.Controllers
         {
             if (file == null || file.Length == 0) return BadRequest("Lütfen bir dosya yükleyin.");
 
-            // 🚀 EXCEL KORUMASI: Uzantı kontrolü
             if (!file.FileName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
-                return BadRequest("ŞEFİM DİKKAT! Lütfen '.xlsx' dosyasını değil, sonu '.csv' ile biten dosyayı seçin.");
+                return BadRequest("ŞEFİM DİKKAT! Lütfen '.xlsx' dosyasını değil, sonu '.csv' ile biten personel listesini seçin.");
 
             int successCount = 0;
-            // Türkçe karakterleri sorunsuz okumak için UTF-8 tanımladık
+            int updateCount = 0; // 🚀 Güncellenenleri saymak için
             using var streamReader = new StreamReader(file.OpenReadStream(), System.Text.Encoding.UTF8);
+
+            // İlk satırı (başlıkları) atlamak için okuma yapıyoruz
+            var headerLine = await streamReader.ReadLineAsync();
 
             while (!streamReader.EndOfStream)
             {
                 var line = await streamReader.ReadLineAsync();
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
-                // 🚀 EXCEL BÖLGESEL DİL KORUMASI: Sütunlar virgül ile mi yoksa noktalı virgül ile mi ayrılmış?
                 var columns = line.Contains(";") ? line.Split(';') : line.Split(',');
 
                 try
                 {
                     string ad = columns[0].Replace("\0", "").Trim();
-                    if (string.IsNullOrEmpty(ad) || ad == "KAAN" || ad == "Lokasyon Adı") continue; // Başlıkları atla
+                    // Başlık satırı bir şekilde atlanmadıysa diye ekstra koruma
+                    if (string.IsNullOrEmpty(ad) || ad.Equals("Adı", StringComparison.OrdinalIgnoreCase)) continue;
 
                     string soyad = columns.Length > 1 ? columns[1].Replace("\0", "").Trim() : "";
+
+                    // 🚀 CSV'DEKİ YENİ ALANLAR PARÇALANIYOR
+                    string adres = columns.Length > 2 ? columns[2].Replace("\0", "").Trim() : "";
+                    string il = columns.Length > 3 ? columns[3].Replace("\0", "").Trim() : "";
+                    string ilce = columns.Length > 4 ? columns[4].Replace("\0", "").Trim() : "";
                     string plaka = columns.Length > 5 ? columns[5].Replace("\0", "").Trim() : "ARAÇ YOK";
 
-                    string safeName = $"{ad.ToLower().Replace(" ", "")}{soyad.ToLower().Replace(" ", "")}";
-                    string uniqueSuffix = Guid.NewGuid().ToString().Substring(0, 4);
+                    string fullName = $"{ad} {soyad}".Trim();
 
-                    var user = new User
+                    // 🚀 AKILLI GÜNCELLEME (UPSERT) MANTIĞI
+                    // Bu personel zaten Yeşil Pano'da kayıtlı mı diye kontrol ediyoruz
+                    var existingUser = await _context.Users
+                        .Include(u => u.FieldWorkerProfile)
+                        .FirstOrDefaultAsync(u => u.FullName == fullName && u.TenantId == _targetTenantId);
+
+                    if (existingUser != null)
                     {
-                        Username = $"{safeName}_{uniqueSuffix}",
-                        Email = $"{safeName}_{uniqueSuffix}@yesilpano.com",
-                        PasswordHash = BCrypt.Net.BCrypt.HashPassword("Teamer123!"),
-                        FullName = $"{ad} {soyad}",
-                        PhoneNumber = "05550000000",
-                        IsActive = true,
-                        TenantId = _targetTenantId
-                    };
-
-                    _context.Users.Add(user);
-
-                    var profile = new FieldWorkerProfile
+                        // 🔄 MEVCUT PERSONEL: Sadece yeni gelen Adres, İl, İlçe ve Plaka bilgilerini GÜNCELLİYORUZ! (SİLME YOK)
+                        if (existingUser.FieldWorkerProfile != null)
+                        {
+                            existingUser.FieldWorkerProfile.Address = adres;
+                            existingUser.FieldWorkerProfile.City = il;
+                            existingUser.FieldWorkerProfile.District = ilce;
+                            existingUser.FieldWorkerProfile.VehiclePlate = string.IsNullOrWhiteSpace(plaka) || plaka == "ARAÇ YOK" ? "-" : plaka;
+                        }
+                        updateCount++;
+                    }
+                    else
                     {
-                        UserId = user.Id,
-                        ProjectName = "Yeşil Pano Projesi",
-                        VehiclePlate = plaka == "ARAÇ YOK" ? "-" : plaka,
-                        TeamLeader = "-",
-                        HomeLocation = new NetTopologySuite.Geometries.Point(32.85411, 39.92077) { SRID = 4326 }
-                    };
+                        // ➕ YENİ PERSONEL: Yoksa sıfırdan ekliyoruz
+                        string safeName = $"{ad.ToLower().Replace(" ", "")}{soyad.ToLower().Replace(" ", "")}";
+                        string uniqueSuffix = Guid.NewGuid().ToString().Substring(0, 4);
 
-                    _context.FieldWorkerProfiles.Add(profile);
-                    successCount++;
+                        var user = new User
+                        {
+                            Username = $"{safeName}_{uniqueSuffix}",
+                            Email = $"{safeName}_{uniqueSuffix}@yesilpano.com",
+                            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Teamer123!"),
+                            FullName = fullName,
+                            PhoneNumber = "05550000000",
+                            IsActive = true,
+                            TenantId = _targetTenantId
+                        };
+
+                        _context.Users.Add(user);
+
+                        var profile = new FieldWorkerProfile
+                        {
+                            UserId = user.Id,
+                            ProjectName = "Yeşil Pano Projesi",
+                            VehiclePlate = string.IsNullOrWhiteSpace(plaka) || plaka == "ARAÇ YOK" ? "-" : plaka,
+                            TeamLeader = "-",
+                            Address = adres, // 🚀 YENİ
+                            City = il,       // 🚀 YENİ
+                            District = ilce, // 🚀 YENİ
+                            HomeLocation = new NetTopologySuite.Geometries.Point(32.85411, 39.92077) { SRID = 4326 }
+                        };
+
+                        _context.FieldWorkerProfiles.Add(profile);
+                        successCount++;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -110,7 +144,7 @@ namespace GA.Presentation.Controllers
             }
 
             await _context.SaveChangesAsync();
-            return Ok(new { Message = $"{successCount} adet personel başarıyla Yeşil Pano firmasına aktarıldı!" });
+            return Ok(new { Message = $"İşlem Başarılı! {successCount} yeni personel eklendi, {updateCount} mevcut personelin plaka ve adres detayları SİLİNMEDEN güncellendi!" });
         }
 
         // 🟢 2. UÇ NOKTA: İSTASYON CSV AKTARIMI (Trugo vb.)

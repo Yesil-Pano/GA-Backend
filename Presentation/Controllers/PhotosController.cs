@@ -16,6 +16,9 @@ namespace GA.Presentation.Controllers
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
 
+        private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
+        private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
+
         // Maksimum fotoğraf boyutu: 10 MB
         private const long MaxFileSizeBytes = 10 * 1024 * 1024;
 
@@ -99,7 +102,10 @@ namespace GA.Presentation.Controllers
                 .Where(p => p.EntityType == entityType
                          && p.EntityId   == entityId
                          && !p.IsDeleted
-                         && (isSuperAdmin || p.TenantId == tenantId))
+                         && (isSuperAdmin ||
+                              p.TenantId == tenantId ||
+                              (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId) ||
+                              (tenantId == _yesilPanoTenantId && p.TenantId == _trugoTenantId)))
                 .OrderBy(p => p.CreatedAt)
                 .Select(p => new PhotoDto
                 {
@@ -132,7 +138,10 @@ namespace GA.Presentation.Controllers
                 .IgnoreQueryFilters()
                 .Where(p => p.Id == id
                          && !p.IsDeleted
-                         && (isSuperAdmin || p.TenantId == tenantId))
+                         && (isSuperAdmin ||
+                              p.TenantId == tenantId ||
+                              (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId) ||
+                              (tenantId == _yesilPanoTenantId && p.TenantId == _trugoTenantId)))
                 .Select(p => new { p.Data, p.ContentType, p.FileName })
                 .FirstOrDefaultAsync();
 

@@ -1,5 +1,7 @@
 ﻿using NetTopologySuite.Geometries;
 using GA.Core.Domain.Common;
+using System;
+using System.Collections.Generic;
 
 namespace GA.Core.Domain.Entities
 {
@@ -10,7 +12,12 @@ namespace GA.Core.Domain.Entities
 
         public string? VehiclePlate { get; set; }
         public string? ProjectName { get; set; }
-        public string? TeamLeader { get; set; } // 💡 Videodaki Ekip Lideri alanı eklendi
+        public string? TeamLeader { get; set; }
+
+        // 🚀 CSV'DEN GELEN YENİ ADRES VE BÖLGE ALANLARI
+        public string? Address { get; set; }
+        public string? City { get; set; }
+        public string? District { get; set; }
 
         public Point? HomeLocation { get; set; }
 

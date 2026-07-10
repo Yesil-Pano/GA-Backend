@@ -28,18 +28,27 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetWorkOrders()
+        public async Task<IActionResult> GetWorkOrders([FromQuery] string? scope)
         {
             var tenantId = _currentUserService.TenantId;
+            var userId = _currentUserService.UserId;
             var isSuperAdmin = tenantId == Guid.Empty;
 
-            var workOrders = await _context.WorkOrders
+            var query = _context.WorkOrders
                 .IgnoreQueryFilters()
                 .Where(w => !w.IsDeleted &&
                             (isSuperAdmin ||
                              w.TenantId == tenantId ||
                              (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
-                             (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)))
+                             (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
+
+            // 🚀 Mobil Uygulama Filtresi: "Sadece bana atananları getir"
+            if (scope == "mine" && userId != Guid.Empty && !isSuperAdmin)
+            {
+                query = query.Where(w => w.AssignedToUserId == userId);
+            }
+
+            var workOrders = await query
                 .Select(w => new {
                     id = w.Id,
                     title = w.Title,
@@ -48,12 +57,15 @@ namespace GA.Presentation.Controllers
                     priority = w.Priority,
                     status = w.Status,
                     type = w.WorkType,
-                    // 🚀 DETAY EKRANI İÇİN EKSİK ALANLAR SEÇİLDİ
                     category = w.WorkCategory,
                     mobileDescription = w.MobileDescription,
                     address = w.Address,
+
+                    // Zaman biçimlendirmeleri orijinal hale getirildi
+                    plannedDate = w.StartDate.ToString("yyyy-MM-dd HH:mm"),
                     startDate = w.StartDate.ToString("yyyy-MM-dd HH:mm"),
                     endDate = w.EndDate.ToString("yyyy-MM-dd HH:mm"),
+
                     isPeriodic = w.IsPeriodic,
                     recurrenceInterval = w.RecurrenceInterval,
 
@@ -65,6 +77,16 @@ namespace GA.Presentation.Controllers
 
                     openedByUserId = w.OpenedByUserId,
                     openedByUserName = _context.Users.Where(u => u.Id == w.OpenedByUserId).Select(u => u.FullName).FirstOrDefault() ?? "-",
+
+                    // 🚀 DÜZELTME: Mobil uygulamanın çökmemesi için beklediği eksik zaman damgaları eklendi
+                    startedAt = w.StartedAt,
+                    completedAt = w.CompletedAt,
+                    cancelledAt = w.CancelledAt,
+
+                    fieldNote = w.FieldNote,
+                    fieldNoteAddedAt = w.FieldNoteAddedAt.HasValue
+                        ? w.FieldNoteAddedAt.Value.ToString("yyyy-MM-dd HH:mm")
+                        : null,
 
                     position = new[] { w.Location.Y, w.Location.X }
                 }).ToListAsync();
@@ -108,8 +130,30 @@ namespace GA.Presentation.Controllers
 
             Guid targetTenantId = tenantId;
 
-            if (tenantId == _trugoTenantId) targetTenantId = _yesilPanoTenantId;
-            else if (isSuperAdmin && dto.TenantId.HasValue && dto.TenantId.Value != Guid.Empty) targetTenantId = dto.TenantId.Value;
+            if (tenantId == _trugoTenantId)
+            {
+                targetTenantId = _yesilPanoTenantId;
+            }
+            else if (isSuperAdmin)
+            {
+                if (dto.TenantId.HasValue && dto.TenantId.Value != Guid.Empty)
+                {
+                    targetTenantId = dto.TenantId.Value;
+                }
+                // 🚀 BÜYÜK SİHİR: Eğer Admin firma seçmemişse ama bir personel atamışsa, 
+                // o personelin hangi firmada olduğuna (TenantId) bak ve iş emrini otomatik olarak oraya zimmetle!
+                else if (dto.AssignedToUserId.HasValue && dto.AssignedToUserId.Value != Guid.Empty)
+                {
+                    var assignedUser = await _context.Users
+                        .IgnoreQueryFilters()
+                        .FirstOrDefaultAsync(u => u.Id == dto.AssignedToUserId.Value);
+
+                    if (assignedUser != null)
+                    {
+                        targetTenantId = assignedUser.TenantId;
+                    }
+                }
+            }
 
             var workOrder = new WorkOrder
             {
@@ -118,7 +162,6 @@ namespace GA.Presentation.Controllers
                 CustomerName = dto.CustomerName,
                 Priority = dto.Priority,
                 WorkType = dto.Type,
-                // 🚀 EKSİK OLAN TÜM EŞLEŞTİRMELER (MAPPINGS) EKLENDİ
                 WorkCategory = dto.Category,
                 MobileDescription = dto.MobileDescription,
                 Address = dto.Address,
@@ -130,14 +173,16 @@ namespace GA.Presentation.Controllers
                 IsPeriodic = dto.IsPeriodic,
                 RecurrenceInterval = dto.RecurrenceInterval ?? "None",
                 Location = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 },
-                TenantId = targetTenantId,
+
+                TenantId = targetTenantId, // 🔒 Artık "Guid.Empty" değil, Yasin'in firmasına (Yeşil Pano'ya) başarıyla zimmetlendi!
+
                 Status = "Bekliyor"
             };
 
             _context.WorkOrders.Add(workOrder);
             await _context.SaveChangesAsync();
 
-            return Ok(new { message = "İş emri başarıyla oluşturuldu ve doğrudan saha ekiplerinin ekranına düşürüldü!" });
+            return Ok(new { message = "İş emri başarıyla oluşturuldu ve saha ekiplerinin ekranına düştü!" });
         }
 
         [HttpPut("{id}/status")]
@@ -157,15 +202,63 @@ namespace GA.Presentation.Controllers
 
             workOrder.Status = dto.Status;
 
-            if (dto.Status == "Tamamlandı" || dto.Status == "İptal Edildi")
+            if (!string.IsNullOrWhiteSpace(dto.FieldNote))
+            {
+                workOrder.FieldNote = dto.FieldNote.Trim();
+                workOrder.FieldNoteAddedAt = DateTime.UtcNow;
+            }
+
+            if (dto.Status == "Tamamlandı" || dto.Status == "İptal" || dto.Status == "İptal Edildi")
+            {
                 workOrder.CompletedAt = DateTime.UtcNow;
+            }
 
             await _context.SaveChangesAsync();
-            return Ok(new { message = "İş emri statüsü güncellendi." });
+            return Ok(new { message = "İş emri statüsü güncellendi.", status = workOrder.Status });
+        }
+
+        [HttpPut("{id}/schedule")]
+        public async Task<IActionResult> UpdateSchedule(Guid id, [FromBody] UpdateWorkOrderScheduleDto dto)
+        {
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            var workOrder = await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted &&
+                                          (isSuperAdmin ||
+                                           w.TenantId == tenantId ||
+                                           (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
+                                           (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
+
+            if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
+
+            var isArıza = workOrder.WorkType.Contains("Arıza", StringComparison.OrdinalIgnoreCase) ||
+                          workOrder.WorkCategory.Contains("Arıza", StringComparison.OrdinalIgnoreCase);
+
+            if (!isArıza)
+            {
+                workOrder.StartDate = DateTime.SpecifyKind(dto.StartDate, DateTimeKind.Utc);
+            }
+
+            workOrder.EndDate = DateTime.SpecifyKind(dto.EndDate, DateTimeKind.Utc);
+
+            if (workOrder.EndDate < workOrder.StartDate)
+            {
+                return BadRequest(new { message = "Bitiş tarihi başlangıç tarihinden önce olamaz." });
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "İş emri tarihleri güncellendi.",
+                startDate = workOrder.StartDate.ToString("yyyy-MM-dd HH:mm"),
+                endDate = workOrder.EndDate.ToString("yyyy-MM-dd HH:mm"),
+            });
         }
     }
 
-    // 🚀 DTO EKSİKLERİ GİDERİLDİ
     public class CreateWorkOrderDto
     {
         public string Title { get; set; } = string.Empty;
@@ -191,5 +284,12 @@ namespace GA.Presentation.Controllers
     public class UpdateWorkOrderStatusDto
     {
         public string Status { get; set; } = string.Empty;
+        public string? FieldNote { get; set; }
+    }
+
+    public class UpdateWorkOrderScheduleDto
+    {
+        public DateTime StartDate { get; set; }
+        public DateTime EndDate { get; set; }
     }
 }
