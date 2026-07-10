@@ -60,9 +60,14 @@ namespace GA.Presentation.Controllers
                     city = u.FieldWorkerProfile!.City ?? "-",
                     district = u.FieldWorkerProfile!.District ?? "-",
 
-                    position = u.FieldWorkerProfile!.HomeLocation != null
-                        ? new[] { u.FieldWorkerProfile.HomeLocation.Y, u.FieldWorkerProfile.HomeLocation.X }
-                        : new[] { 39.92077, 32.85411 }
+                    hasLiveLocation = u.Location != null,
+                    locationUpdatedAt = u.LocationUpdatedAt,
+
+                    position = u.Location != null
+                        ? new[] { u.Location.Y, u.Location.X }
+                        : (u.FieldWorkerProfile!.HomeLocation != null
+                            ? new[] { u.FieldWorkerProfile.HomeLocation.Y, u.FieldWorkerProfile.HomeLocation.X }
+                            : new[] { 39.92077, 32.85411 })
                 }).ToListAsync();
 
             return Ok(teams);

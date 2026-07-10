@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace GA.Presentation.Controllers
 {
-    [Route("api/[controller]")]
+    [Route("api/locations")]
     [ApiController]
     [Authorize]
     public class LocationController : ControllerBase
