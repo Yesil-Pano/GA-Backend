@@ -56,6 +56,8 @@ namespace GA.Infrastructure.Persistence.Context
         public DbSet<Station> Stations { get; set; } = null!;
         public DbSet<Project> Projects { get; set; } = null!;
         public DbSet<Photo> Photos { get; set; } = null!;
+        public DbSet<City> Cities { get; set; } = null!;
+        public DbSet<District> Districts { get; set; } = null!;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -116,6 +118,68 @@ namespace GA.Infrastructure.Persistence.Context
                     {
                         j.HasKey("FieldWorkerProfileId", "ProjectId");
                     });
+
+            // İl / İlçe — kaynak Cities/Districts şeması ile uyumlu (cross-server COPY)
+            modelBuilder.Entity<City>(entity =>
+            {
+                entity.ToTable("Cities");
+                entity.HasKey(c => c.Id);
+                entity.Property(c => c.Name).HasMaxLength(100).IsRequired();
+                entity.Property(c => c.Latitude).HasMaxLength(50).IsRequired();
+                entity.Property(c => c.Longitude).HasMaxLength(50).IsRequired();
+                entity.Property(c => c.Createdby).HasMaxLength(100).IsRequired();
+                entity.Property(c => c.Updatedby).HasMaxLength(100).IsRequired();
+                entity.HasIndex(c => c.Name).IsUnique().HasDatabaseName("IX_Cities_Name");
+            });
+
+            modelBuilder.Entity<District>(entity =>
+            {
+                entity.ToTable("Districts");
+                entity.HasKey(d => d.Id);
+                entity.Property(d => d.Name).HasMaxLength(100).IsRequired();
+                entity.Property(d => d.Latitude).HasMaxLength(50).IsRequired();
+                entity.Property(d => d.Longitude).HasMaxLength(50).IsRequired();
+                entity.Property(d => d.Createdby).HasMaxLength(100).IsRequired();
+                entity.Property(d => d.Updatedby).HasMaxLength(100).IsRequired();
+                entity.HasIndex(d => d.CityId).HasDatabaseName("IX_Districts_CityId");
+                entity.HasOne(d => d.City)
+                    .WithMany(c => c.Districts)
+                    .HasForeignKey(d => d.CityId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_Districts_Cities_CityId");
+            });
+
+            modelBuilder.Entity<WorkOrder>(entity =>
+            {
+                entity.HasOne(w => w.CityRef)
+                    .WithMany()
+                    .HasForeignKey(w => w.CityId)
+                    .OnDelete(DeleteBehavior.SetNull);
+
+                entity.HasOne(w => w.DistrictRef)
+                    .WithMany()
+                    .HasForeignKey(w => w.DistrictId)
+                    .OnDelete(DeleteBehavior.SetNull);
+
+                entity.HasIndex(w => w.CityId);
+                entity.HasIndex(w => w.DistrictId);
+            });
+
+            modelBuilder.Entity<Station>(entity =>
+            {
+                entity.HasOne(s => s.CityRef)
+                    .WithMany()
+                    .HasForeignKey(s => s.CityId)
+                    .OnDelete(DeleteBehavior.SetNull);
+
+                entity.HasOne(s => s.DistrictRef)
+                    .WithMany()
+                    .HasForeignKey(s => s.DistrictId)
+                    .OnDelete(DeleteBehavior.SetNull);
+
+                entity.HasIndex(s => s.CityId);
+                entity.HasIndex(s => s.DistrictId);
+            });
         }
 
         private void ConfigureTenantFilter<TEntity>(ModelBuilder modelBuilder) where TEntity : class, IMultiTenant

@@ -43,5 +43,12 @@ namespace GA.Core.Domain.Entities
         // 🔒 Çoklu Kiracı (Multi-Tenant) İzolasyon Alanları
         public Guid TenantId { get; set; }
         public Guid? CustomerId { get; set; }
+
+        /// <summary>Cities/Districts referans FK (string City/District alanları geriye dönük uyumluluk için kalır)</summary>
+        public Guid? CityId { get; set; }
+        public Guid? DistrictId { get; set; }
+
+        public City? CityRef { get; set; }
+        public District? DistrictRef { get; set; }
     }
 }

@@ -1,4 +1,6 @@
-﻿using GA.Core.Domain.Entities;
+﻿using GA.Application.Features.Geo;
+using GA.Application.Features.WorkOrders;
+using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.AspNetCore.Authorization;
@@ -17,14 +19,35 @@ namespace GA.Presentation.Controllers
     {
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
+        private readonly IPeriodicWorkOrderService _periodicWorkOrderService;
 
         private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
         private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
 
-        public WorkOrdersController(ApplicationDbContext context, ICurrentUserService currentUserService)
+        public WorkOrdersController(
+            ApplicationDbContext context,
+            ICurrentUserService currentUserService,
+            IPeriodicWorkOrderService periodicWorkOrderService)
         {
             _context = context;
             _currentUserService = currentUserService;
+            _periodicWorkOrderService = periodicWorkOrderService;
+        }
+
+        /// <summary>
+        /// Süresi gelen periyodik şablonlardan iş emri üretmeyi hemen çalıştırır (manuel tetik).
+        /// POST /api/workorders/periodic/run
+        /// </summary>
+        [HttpPost("periodic/run")]
+        public async Task<IActionResult> RunPeriodicNow()
+        {
+            var result = await _periodicWorkOrderService.ProcessDueAsync();
+            return Ok(new
+            {
+                message = "Periyodik otomasyon çalıştırıldı.",
+                templatesProcessed = result.TemplatesProcessed,
+                workOrdersCreated = result.WorkOrdersCreated,
+            });
         }
 
         [HttpGet]
@@ -68,9 +91,14 @@ namespace GA.Presentation.Controllers
 
                     isPeriodic = w.IsPeriodic,
                     recurrenceInterval = w.RecurrenceInterval,
+                    nextExecutionDate = w.NextExecutionDate.HasValue
+                        ? w.NextExecutionDate.Value.ToString("yyyy-MM-dd HH:mm")
+                        : null,
 
                     assignedToUserId = w.AssignedToUserId,
-                    assignedToUserName = _context.Users.Where(u => u.Id == w.AssignedToUserId).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış",
+                    assignedToUserName = w.AssignedToUserId == null
+                        ? "Atanmamış"
+                        : (_context.Users.Where(u => u.Id == w.AssignedToUserId).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış"),
 
                     operationUserId = w.OperationUserId,
                     operationUserName = _context.Users.Where(u => u.Id == w.OperationUserId).Select(u => u.FullName).FirstOrDefault() ?? "-",
@@ -87,6 +115,11 @@ namespace GA.Presentation.Controllers
                     fieldNoteAddedAt = w.FieldNoteAddedAt.HasValue
                         ? w.FieldNoteAddedAt.Value.ToString("yyyy-MM-dd HH:mm")
                         : null,
+
+                    cityId = w.CityId,
+                    districtId = w.DistrictId,
+                    cityName = w.CityRef != null ? w.CityRef.Name : null,
+                    districtName = w.DistrictRef != null ? w.DistrictRef.Name : null,
 
                     position = new[] { w.Location.Y, w.Location.X }
                 }).ToListAsync();
@@ -115,10 +148,33 @@ namespace GA.Presentation.Controllers
                             (isSuperAdmin ||
                              s.TenantId == tenantId ||
                              (tenantId == _trugoTenantId && s.TenantId == _yesilPanoTenantId)))
-                .Select(s => new { id = s.Id, name = s.Name })
+                .Select(s => new {
+                    id = s.Id,
+                    name = s.Name,
+                    address = s.Address,
+                    city = s.City,
+                    district = s.District,
+                    cityId = s.CityId,
+                    districtId = s.DistrictId,
+                    ownerCompany = s.OwnerCompany,
+                    tenantId = s.TenantId,
+                    latitude = s.Location.Y,
+                    longitude = s.Location.X,
+                })
+                .OrderBy(s => s.name)
                 .ToListAsync();
 
-            return Ok(new { teams, stations });
+            var projects = await _context.Projects
+                .IgnoreQueryFilters()
+                .Where(p => !p.IsDeleted &&
+                            (isSuperAdmin ||
+                             p.TenantId == tenantId ||
+                             (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId)))
+                .Select(p => new { id = p.Id, name = p.Name, tenantId = p.TenantId })
+                .OrderBy(p => p.name)
+                .ToListAsync();
+
+            return Ok(new { teams, stations, projects });
         }
 
         [HttpPost]
@@ -155,6 +211,47 @@ namespace GA.Presentation.Controllers
                 }
             }
 
+            Guid? cityId = dto.CityId;
+            Guid? districtId = dto.DistrictId;
+
+            if (dto.StationId.HasValue && dto.StationId.Value != Guid.Empty)
+            {
+                var station = await _context.Stations
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(s => s.Id == dto.StationId.Value && !s.IsDeleted);
+
+                if (station != null)
+                {
+                    var resolved = await GeoResolver.ResolveFromStationAsync(_context, station);
+                    cityId ??= resolved.CityId;
+                    districtId ??= resolved.DistrictId;
+
+                    if (string.IsNullOrWhiteSpace(dto.CustomerName))
+                        dto.CustomerName = station.Name;
+                    if (string.IsNullOrWhiteSpace(dto.Address))
+                        dto.Address = station.Address;
+                }
+            }
+            else if ((!cityId.HasValue || !districtId.HasValue) && !string.IsNullOrWhiteSpace(dto.CustomerName))
+            {
+                var stationByName = await _context.Stations
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(s => !s.IsDeleted && s.Name.ToLower() == dto.CustomerName.Trim().ToLower());
+
+                if (stationByName != null)
+                {
+                    var resolved = await GeoResolver.ResolveFromStationAsync(_context, stationByName);
+                    cityId ??= resolved.CityId;
+                    districtId ??= resolved.DistrictId;
+                }
+            }
+            else
+            {
+                var resolved = await GeoResolver.ResolveAsync(_context, cityId, districtId, null, null);
+                cityId = resolved.CityId;
+                districtId = resolved.DistrictId;
+            }
+
             var workOrder = new WorkOrder
             {
                 Title = dto.Title,
@@ -172,9 +269,15 @@ namespace GA.Presentation.Controllers
                 AssignedToUserId = dto.AssignedToUserId,
                 IsPeriodic = dto.IsPeriodic,
                 RecurrenceInterval = dto.RecurrenceInterval ?? "None",
+                NextExecutionDate = dto.IsPeriodic
+                    ? WorkOrderRecurrence.ComputeNextExecution(
+                        DateTime.SpecifyKind(dto.StartDate, DateTimeKind.Utc), dto.RecurrenceInterval)
+                    : null,
                 Location = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 },
+                CityId = cityId,
+                DistrictId = districtId,
 
-                TenantId = targetTenantId, // 🔒 Artık "Guid.Empty" değil, Yasin'in firmasına (Yeşil Pano'ya) başarıyla zimmetlendi!
+                TenantId = targetTenantId,
 
                 Status = "Bekliyor"
             };
@@ -183,6 +286,60 @@ namespace GA.Presentation.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "İş emri başarıyla oluşturuldu ve saha ekiplerinin ekranına düştü!" });
+        }
+
+        /// <summary>
+        /// Atanmamış / yanlış atanmış iş emrine saha personeli atar veya atamayı kaldırır.
+        /// PUT /api/workorders/{id}/assign
+        /// </summary>
+        [HttpPut("{id}/assign")]
+        public async Task<IActionResult> AssignWorkOrder(Guid id, [FromBody] AssignWorkOrderDto dto)
+        {
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            var workOrder = await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted &&
+                                          (isSuperAdmin ||
+                                           w.TenantId == tenantId ||
+                                           (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
+                                           (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
+
+            if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
+
+            if (dto.AssignedToUserId.HasValue && dto.AssignedToUserId.Value != Guid.Empty)
+            {
+                var assignee = await _context.Users
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(u => u.Id == dto.AssignedToUserId.Value
+                                              && !u.IsDeleted
+                                              && u.IsActive
+                                              && u.FieldWorkerProfile != null);
+
+                if (assignee == null)
+                    return BadRequest(new { message = "Seçilen saha personeli bulunamadı veya aktif değil." });
+
+                workOrder.AssignedToUserId = assignee.Id;
+                await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    message = "İş emri personele atandı.",
+                    assignedToUserId = assignee.Id,
+                    assignedToUserName = assignee.FullName,
+                });
+            }
+
+            workOrder.AssignedToUserId = null;
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "İş emri ataması kaldırıldı.",
+                assignedToUserId = (Guid?)null,
+                assignedToUserName = "Atanmamış",
+            });
         }
 
         [HttpPut("{id}/status")]
@@ -257,6 +414,103 @@ namespace GA.Presentation.Controllers
                 endDate = workOrder.EndDate.ToString("yyyy-MM-dd HH:mm"),
             });
         }
+
+        /// <summary>
+        /// İş emri detay alanlarını günceller.
+        /// PUT /api/workorders/{id}
+        /// </summary>
+        [HttpPut("{id}")]
+        public async Task<IActionResult> UpdateWorkOrder(Guid id, [FromBody] UpdateWorkOrderDto dto)
+        {
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            var workOrder = await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted &&
+                                          (isSuperAdmin ||
+                                           w.TenantId == tenantId ||
+                                           (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
+                                           (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
+
+            if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
+
+            if (string.IsNullOrWhiteSpace(dto.Title))
+                return BadRequest(new { message = "Başlık zorunludur." });
+
+            var start = DateTime.SpecifyKind(dto.StartDate, DateTimeKind.Utc);
+            var end = DateTime.SpecifyKind(dto.EndDate, DateTimeKind.Utc);
+            if (end < start)
+                return BadRequest(new { message = "Bitiş tarihi başlangıç tarihinden önce olamaz." });
+
+            workOrder.Title = dto.Title.Trim();
+            workOrder.CustomerName = (dto.CustomerName ?? workOrder.CustomerName).Trim();
+            workOrder.Description = dto.Description ?? string.Empty;
+            workOrder.MobileDescription = dto.MobileDescription ?? string.Empty;
+            workOrder.Address = dto.Address ?? string.Empty;
+            workOrder.Priority = string.IsNullOrWhiteSpace(dto.Priority) ? workOrder.Priority : dto.Priority;
+            workOrder.WorkType = string.IsNullOrWhiteSpace(dto.Type) ? workOrder.WorkType : dto.Type;
+            workOrder.WorkCategory = string.IsNullOrWhiteSpace(dto.Category) ? workOrder.WorkCategory : dto.Category;
+            workOrder.StartDate = start;
+            workOrder.EndDate = end;
+            workOrder.Location = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 };
+            workOrder.OperationUserId = dto.OperationUserId;
+            workOrder.OpenedByUserId = dto.OpenedByUserId;
+            workOrder.AssignedToUserId = dto.AssignedToUserId;
+            workOrder.IsPeriodic = dto.IsPeriodic;
+            workOrder.RecurrenceInterval = dto.IsPeriodic
+                ? (string.IsNullOrWhiteSpace(dto.RecurrenceInterval) ? "Aylik" : dto.RecurrenceInterval)
+                : "None";
+            workOrder.NextExecutionDate = dto.IsPeriodic
+                ? WorkOrderRecurrence.ComputeNextExecution(start, workOrder.RecurrenceInterval)
+                : null;
+
+            if (dto.CityId.HasValue && dto.CityId != Guid.Empty)
+                workOrder.CityId = dto.CityId;
+            if (dto.DistrictId.HasValue && dto.DistrictId != Guid.Empty)
+                workOrder.DistrictId = dto.DistrictId;
+
+            workOrder.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            var operationName = workOrder.OperationUserId == null
+                ? "-"
+                : await _context.Users.Where(u => u.Id == workOrder.OperationUserId).Select(u => u.FullName).FirstOrDefaultAsync() ?? "-";
+            var openedByName = workOrder.OpenedByUserId == null
+                ? "-"
+                : await _context.Users.Where(u => u.Id == workOrder.OpenedByUserId).Select(u => u.FullName).FirstOrDefaultAsync() ?? "-";
+            var assignedName = workOrder.AssignedToUserId == null
+                ? "Atanmamış"
+                : await _context.Users.Where(u => u.Id == workOrder.AssignedToUserId).Select(u => u.FullName).FirstOrDefaultAsync() ?? "Atanmamış";
+
+            return Ok(new
+            {
+                message = "İş emri güncellendi.",
+                id = workOrder.Id,
+                title = workOrder.Title,
+                customerName = workOrder.CustomerName,
+                description = workOrder.Description,
+                mobileDescription = workOrder.MobileDescription,
+                address = workOrder.Address,
+                priority = workOrder.Priority,
+                type = workOrder.WorkType,
+                category = workOrder.WorkCategory,
+                startDate = workOrder.StartDate.ToString("yyyy-MM-dd HH:mm"),
+                endDate = workOrder.EndDate.ToString("yyyy-MM-dd HH:mm"),
+                position = new[] { workOrder.Location.Y, workOrder.Location.X },
+                operationUserId = workOrder.OperationUserId,
+                operationUserName = operationName,
+                openedByUserId = workOrder.OpenedByUserId,
+                openedByUserName = openedByName,
+                assignedToUserId = workOrder.AssignedToUserId,
+                assignedToUserName = assignedName,
+                isPeriodic = workOrder.IsPeriodic,
+                recurrenceInterval = workOrder.RecurrenceInterval,
+                nextExecutionDate = workOrder.NextExecutionDate.HasValue
+                    ? workOrder.NextExecutionDate.Value.ToString("yyyy-MM-dd HH:mm")
+                    : null,
+            });
+        }
     }
 
     public class CreateWorkOrderDto
@@ -279,6 +533,14 @@ namespace GA.Presentation.Controllers
         public double Latitude { get; set; }
         public double Longitude { get; set; }
         public Guid? TenantId { get; set; }
+        public Guid? StationId { get; set; }
+        public Guid? CityId { get; set; }
+        public Guid? DistrictId { get; set; }
+    }
+
+    public class AssignWorkOrderDto
+    {
+        public Guid? AssignedToUserId { get; set; }
     }
 
     public class UpdateWorkOrderStatusDto
@@ -291,5 +553,28 @@ namespace GA.Presentation.Controllers
     {
         public DateTime StartDate { get; set; }
         public DateTime EndDate { get; set; }
+    }
+
+    public class UpdateWorkOrderDto
+    {
+        public string Title { get; set; } = string.Empty;
+        public string CustomerName { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string MobileDescription { get; set; } = string.Empty;
+        public string Address { get; set; } = string.Empty;
+        public string Priority { get; set; } = "Orta";
+        public string Type { get; set; } = "Arıza";
+        public string Category { get; set; } = "Arıza Bildirimi";
+        public DateTime StartDate { get; set; }
+        public DateTime EndDate { get; set; }
+        public double Latitude { get; set; }
+        public double Longitude { get; set; }
+        public Guid? OperationUserId { get; set; }
+        public Guid? OpenedByUserId { get; set; }
+        public Guid? AssignedToUserId { get; set; }
+        public bool IsPeriodic { get; set; }
+        public string RecurrenceInterval { get; set; } = "None";
+        public Guid? CityId { get; set; }
+        public Guid? DistrictId { get; set; }
     }
 }

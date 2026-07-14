@@ -3,6 +3,7 @@ using System;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NetTopologySuite.Geometries;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace GA.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260714101900_AddCitiesAndDistricts")]
+    partial class AddCitiesAndDistricts
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -386,9 +389,6 @@ namespace GA.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<Guid?>("CityId")
-                        .HasColumnType("uuid");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -403,9 +403,6 @@ namespace GA.Migrations
 
                     b.Property<string>("District")
                         .HasColumnType("text");
-
-                    b.Property<Guid?>("DistrictId")
-                        .HasColumnType("uuid");
 
                     b.Property<string>("Edas")
                         .IsRequired()
@@ -482,10 +479,6 @@ namespace GA.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("CityId");
-
-                    b.HasIndex("DistrictId");
 
                     b.ToTable("Stations");
                 });
@@ -823,9 +816,6 @@ namespace GA.Migrations
                     b.Property<DateTime?>("CancelledAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<Guid?>("CityId")
-                        .HasColumnType("uuid");
-
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -842,9 +832,6 @@ namespace GA.Migrations
                     b.Property<string>("Description")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<Guid?>("DistrictId")
-                        .HasColumnType("uuid");
 
                     b.Property<DateTime>("EndDate")
                         .HasColumnType("timestamp with time zone");
@@ -917,10 +904,6 @@ namespace GA.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("AssignedToUserId");
-
-                    b.HasIndex("CityId");
-
-                    b.HasIndex("DistrictId");
 
                     b.HasIndex("OpenedByUserId");
 
@@ -997,23 +980,6 @@ namespace GA.Migrations
                     b.Navigation("Role");
                 });
 
-            modelBuilder.Entity("GA.Core.Domain.Entities.Station", b =>
-                {
-                    b.HasOne("GA.Core.Domain.Entities.City", "CityRef")
-                        .WithMany()
-                        .HasForeignKey("CityId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("GA.Core.Domain.Entities.District", "DistrictRef")
-                        .WithMany()
-                        .HasForeignKey("DistrictId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("CityRef");
-
-                    b.Navigation("DistrictRef");
-                });
-
             modelBuilder.Entity("GA.Core.Domain.Entities.Timesheet", b =>
                 {
                     b.HasOne("GA.Core.Domain.Entities.User", "User")
@@ -1073,16 +1039,6 @@ namespace GA.Migrations
                         .HasForeignKey("AssignedToUserId")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("GA.Core.Domain.Entities.City", "CityRef")
-                        .WithMany()
-                        .HasForeignKey("CityId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("GA.Core.Domain.Entities.District", "DistrictRef")
-                        .WithMany()
-                        .HasForeignKey("DistrictId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("GA.Core.Domain.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("OpenedByUserId")
@@ -1092,10 +1048,6 @@ namespace GA.Migrations
                         .WithMany()
                         .HasForeignKey("OperationUserId")
                         .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("CityRef");
-
-                    b.Navigation("DistrictRef");
                 });
 
             modelBuilder.Entity("GA.Core.Domain.Entities.City", b =>

@@ -28,24 +28,79 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetStations()
+        public async Task<IActionResult> GetStations([FromQuery] Guid? projectId, [FromQuery] Guid? tenantIdFilter)
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
 
-            var stations = await _context.Stations
-                .IgnoreQueryFilters() // 🚀 Zırhı geçici olarak indiriyoruz
+            var query = _context.Stations
+                .IgnoreQueryFilters()
                 .Where(s => !s.IsDeleted &&
                             (isSuperAdmin ||
                              s.TenantId == tenantId ||
-                             (tenantId == _trugoTenantId && s.TenantId == _yesilPanoTenantId))) // 🚀 TRUGO, Yeşil Pano istasyonlarını görebilir
+                             (tenantId == _trugoTenantId && s.TenantId == _yesilPanoTenantId)));
+
+            string? projectName = null;
+            Guid? projectTenantId = null;
+
+            if (projectId.HasValue && projectId.Value != Guid.Empty)
+            {
+                var project = await _context.Projects
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(p => p.Id == projectId.Value && !p.IsDeleted);
+
+                if (project != null)
+                {
+                    projectName = project.Name;
+                    projectTenantId = project.TenantId;
+                }
+            }
+
+            if (tenantIdFilter.HasValue && tenantIdFilter.Value != Guid.Empty)
+            {
+                projectTenantId = tenantIdFilter.Value;
+            }
+
+            if (projectTenantId.HasValue)
+            {
+                query = query.Where(s => s.TenantId == projectTenantId.Value);
+            }
+
+            var stations = await query
                 .Select(s => new {
                     id = s.Id,
                     name = s.Name,
                     statusType = s.StatusType,
                     city = s.City,
+                    address = s.Address,
+                    ownerCompany = s.OwnerCompany,
+                    tenantId = s.TenantId,
                     position = new[] { s.Location.Y, s.Location.X }
                 }).ToListAsync();
+
+            // Proje adına göre OwnerCompany / isim filtreleme (Trugo ↔ Astor ayrımı)
+            if (!string.IsNullOrWhiteSpace(projectName))
+            {
+                var tokens = projectName
+                    .Split(new[] { ' ', '-', '/' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Where(t => t.Length >= 3)
+                    .Select(t => t.ToLowerInvariant())
+                    .ToArray();
+
+                if (tokens.Length > 0)
+                {
+                    var ownershipFiltered = stations.Where(s =>
+                    {
+                        var owner = (s.ownerCompany ?? "").ToLowerInvariant();
+                        var name = (s.name ?? "").ToLowerInvariant();
+                        return tokens.Any(token => owner.Contains(token) || name.Contains(token));
+                    }).ToList();
+
+                    // En az bir eşleşme varsa sahiplik filtresini uygula; yoksa tenant filtresi yeterli kalsın
+                    if (ownershipFiltered.Count > 0)
+                        stations = ownershipFiltered;
+                }
+            }
 
             return Ok(stations);
         }

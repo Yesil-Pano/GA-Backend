@@ -1,6 +1,8 @@
 using GA.Application.Features.Auth;
 using GA.Application.Features.Location;
+using GA.Application.Features.WorkOrders;
 using GA.Core.Interfaces;
+using GA.Infrastructure.Background;
 using GA.Infrastructure.Hubs;
 using GA.Infrastructure.Persistence.Context;
 using GA.Infrastructure.Persistence.Repositories;
@@ -24,6 +26,12 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ILocationService, LocationService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+
+// Periyodik iş emri otomasyonu
+builder.Services.Configure<PeriodicWorkOrdersOptions>(
+    builder.Configuration.GetSection(PeriodicWorkOrdersOptions.SectionName));
+builder.Services.AddScoped<IPeriodicWorkOrderService, PeriodicWorkOrderService>();
+builder.Services.AddHostedService<PeriodicWorkOrderHostedService>();
 
 // SignalR — gerçek zamanlı konum yayını için
 builder.Services.AddSignalR();

@@ -85,7 +85,7 @@ namespace GA.Presentation.Controllers
                             (isSuperAdmin ||
                              p.TenantId == tenantId ||
                              (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId)))
-                .Select(p => new { p.Id, p.Name })
+                .Select(p => new { id = p.Id, name = p.Name, tenantId = p.TenantId })
                 .ToListAsync();
 
             return Ok(projects);
@@ -217,6 +217,59 @@ namespace GA.Presentation.Controllers
 
             await _context.SaveChangesAsync();
             return Ok(new { Message = "Ekip bilgileri kurumsal standartlarda başarıyla güncellendi!" });
+        }
+
+        /// <summary>
+        /// Ekibi soft-delete eder; açık iş emirlerini Atanmamış'a çeker.
+        /// DELETE /api/teams/{id}
+        /// </summary>
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteTeam(Guid id)
+        {
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            var user = await _context.Users
+                .IgnoreQueryFilters()
+                .Include(u => u.FieldWorkerProfile)
+                .FirstOrDefaultAsync(u => u.Id == id && !u.IsDeleted &&
+                                          (isSuperAdmin ||
+                                           u.TenantId == tenantId ||
+                                           (tenantId == _trugoTenantId && u.TenantId == _yesilPanoTenantId)));
+
+            if (user == null)
+                return NotFound(new { Message = "Silinecek ekip bulunamadı veya yetkiniz yetersiz." });
+
+            user.IsDeleted = true;
+            user.IsActive = false;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            if (user.FieldWorkerProfile != null)
+            {
+                user.FieldWorkerProfile.IsDeleted = true;
+                user.FieldWorkerProfile.UpdatedAt = DateTime.UtcNow;
+            }
+
+            var openStatuses = new[] { "Bekliyor", "Devam Ediyor" };
+            var openOrders = await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .Where(w => !w.IsDeleted
+                            && w.AssignedToUserId == id
+                            && openStatuses.Contains(w.Status))
+                .ToListAsync();
+
+            foreach (var order in openOrders)
+            {
+                order.AssignedToUserId = null;
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                Message = "Ekip silindi. Açık iş emirleri Atanmamış durumuna alındı.",
+                unassignedWorkOrderCount = openOrders.Count,
+            });
         }
 
         [HttpPost("update-location")]

@@ -40,5 +40,12 @@ namespace GA.Core.Domain.Entities
         // 🔒 Şirket Ayrıştırma Alanları
         public Guid TenantId { get; set; }
         public Guid? CustomerId { get; set; }
+
+        /// <summary>Rapor / konum filtresi — hibrit C</summary>
+        public Guid? CityId { get; set; }
+        public Guid? DistrictId { get; set; }
+
+        public City? CityRef { get; set; }
+        public District? DistrictRef { get; set; }
     }
 }
