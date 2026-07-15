@@ -1,3 +1,4 @@
+using GA.Application.Features.Notifications;
 using GA.Core.Domain.Entities;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
@@ -12,9 +13,7 @@ namespace GA.Application.Features.WorkOrders
         public const string SectionName = "PeriodicWorkOrders";
 
         public bool Enabled { get; set; } = true;
-        /// <summary>Hosted service polling interval (minutes).</summary>
         public int IntervalMinutes { get; set; } = 15;
-        /// <summary>Max new work orders created per template in a single tick (catch-up).</summary>
         public int MaxCatchUpPerTemplate { get; set; } = 5;
     }
 
@@ -29,23 +28,22 @@ namespace GA.Application.Features.WorkOrders
         Task<PeriodicWorkOrderResult> ProcessDueAsync(CancellationToken cancellationToken = default);
     }
 
-    /// <summary>
-    /// IsPeriodic=true şablonlarda NextExecutionDate &lt;= UtcNow olanları işler:
-    /// yeni operasyonel iş emri oluşturur, şablonun NextExecutionDate'ini ileri alır.
-    /// </summary>
     public class PeriodicWorkOrderService : IPeriodicWorkOrderService
     {
         private readonly ApplicationDbContext _context;
         private readonly PeriodicWorkOrdersOptions _options;
+        private readonly INotificationService _notificationService;
         private readonly ILogger<PeriodicWorkOrderService> _logger;
 
         public PeriodicWorkOrderService(
             ApplicationDbContext context,
             IOptions<PeriodicWorkOrdersOptions> options,
+            INotificationService notificationService,
             ILogger<PeriodicWorkOrderService> logger)
         {
             _context = context;
             _options = options.Value;
+            _notificationService = notificationService;
             _logger = logger;
         }
 
@@ -57,6 +55,7 @@ namespace GA.Application.Features.WorkOrders
 
             var now = DateTime.UtcNow;
             var maxCatchUp = Math.Clamp(_options.MaxCatchUpPerTemplate, 1, 20);
+            var created = new List<WorkOrder>();
 
             var dueTemplates = await _context.WorkOrders
                 .IgnoreQueryFilters()
@@ -86,6 +85,7 @@ namespace GA.Application.Features.WorkOrders
 
                     var clone = CreateExecutionFromTemplate(template, cycleStart, cycleEnd);
                     _context.WorkOrders.Add(clone);
+                    created.Add(clone);
 
                     template.NextExecutionDate = WorkOrderRecurrence.ComputeNextExecution(
                         cycleStart, template.RecurrenceInterval);
@@ -105,7 +105,20 @@ namespace GA.Application.Features.WorkOrders
             }
 
             if (result.WorkOrdersCreated > 0)
+            {
                 await _context.SaveChangesAsync(cancellationToken);
+                foreach (var wo in created)
+                {
+                    await _notificationService.NotifyAsync(
+                        "WorkOrderPeriodic",
+                        "Periyodik iş emri açıldı",
+                        $"{wo.CustomerName}: {wo.Title}",
+                        wo.TenantId,
+                        wo.Id,
+                        null,
+                        cancellationToken);
+                }
+            }
 
             return result;
         }

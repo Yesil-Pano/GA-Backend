@@ -58,6 +58,7 @@ namespace GA.Infrastructure.Persistence.Context
         public DbSet<Photo> Photos { get; set; } = null!;
         public DbSet<City> Cities { get; set; } = null!;
         public DbSet<District> Districts { get; set; } = null!;
+        public DbSet<AppNotification> AppNotifications { get; set; } = null!;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

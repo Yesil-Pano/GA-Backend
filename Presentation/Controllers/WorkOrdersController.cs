@@ -1,4 +1,6 @@
 ﻿using GA.Application.Features.Geo;
+using GA.Application.Features.Notifications;
+using GA.Application.Features.Partners;
 using GA.Application.Features.WorkOrders;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
@@ -20,6 +22,7 @@ namespace GA.Presentation.Controllers
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
         private readonly IPeriodicWorkOrderService _periodicWorkOrderService;
+        private readonly INotificationService _notificationService;
 
         private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
         private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
@@ -27,11 +30,13 @@ namespace GA.Presentation.Controllers
         public WorkOrdersController(
             ApplicationDbContext context,
             ICurrentUserService currentUserService,
-            IPeriodicWorkOrderService periodicWorkOrderService)
+            IPeriodicWorkOrderService periodicWorkOrderService,
+            INotificationService notificationService)
         {
             _context = context;
             _currentUserService = currentUserService;
             _periodicWorkOrderService = periodicWorkOrderService;
+            _notificationService = notificationService;
         }
 
         /// <summary>
@@ -51,7 +56,7 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetWorkOrders([FromQuery] string? scope)
+        public async Task<IActionResult> GetWorkOrders([FromQuery] string? scope, [FromQuery] string? partnerKey)
         {
             var tenantId = _currentUserService.TenantId;
             var userId = _currentUserService.UserId;
@@ -65,10 +70,38 @@ namespace GA.Presentation.Controllers
                              (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
                              (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
 
-            // 🚀 Mobil Uygulama Filtresi: "Sadece bana atananları getir"
+            // Mobil saha ekranı: yalnızca oturum açan kullanıcıya atanmış iş emirleri
             if (scope == "mine" && userId != Guid.Empty && !isSuperAdmin)
             {
                 query = query.Where(w => w.AssignedToUserId == userId);
+            }
+
+            if (isSuperAdmin)
+            {
+                var partner = PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo;
+                var stationRows = await _context.Stations
+                    .IgnoreQueryFilters()
+                    .AsNoTracking()
+                    .Where(s => !s.IsDeleted)
+                    .Select(s => new { s.Name, s.TenantId, s.OwnerCompany })
+                    .ToListAsync();
+
+                var partnerStationNames = stationRows
+                    .Where(s => PartnerCatalog.Matches(partner, s.TenantId, s.OwnerCompany, s.Name))
+                    .Select(s => s.Name.Trim().ToLowerInvariant())
+                    .ToHashSet();
+
+                // Bellekte filtrele: EF HashSet+ToLower çevirisi güvenilmez
+                var candidateIds = await query.Select(w => new { w.Id, w.CustomerName, w.TenantId }).ToListAsync();
+                var allowedIds = candidateIds
+                    .Where(w =>
+                        (partner.TenantId.HasValue && w.TenantId == partner.TenantId.Value)
+                        || partnerStationNames.Contains((w.CustomerName ?? string.Empty).Trim().ToLowerInvariant())
+                        || PartnerCatalog.Matches(partner, w.TenantId, null, w.CustomerName))
+                    .Select(w => w.Id)
+                    .ToHashSet();
+
+                query = query.Where(w => allowedIds.Contains(w.Id));
             }
 
             var workOrders = await query
@@ -128,19 +161,40 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpGet("lookups")]
-        public async Task<IActionResult> GetWorkOrderLookups()
+        public async Task<IActionResult> GetWorkOrderLookups([FromQuery] string? partnerKey)
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
+            var partner = isSuperAdmin ? (PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo) : null;
 
-            var teams = await _context.Users
+            var teamRows = await _context.Users
                 .IgnoreQueryFilters()
+                .Include(u => u.FieldWorkerProfile)
+                    .ThenInclude(f => f!.Projects)
                 .Where(u => !u.IsDeleted && u.FieldWorkerProfile != null &&
                             (isSuperAdmin ||
                              u.TenantId == tenantId ||
                              (tenantId == _trugoTenantId && u.TenantId == _yesilPanoTenantId)))
-                .Select(u => new { id = u.Id, name = u.FullName })
+                .Select(u => new {
+                    id = u.Id,
+                    name = u.FullName,
+                    tenantId = u.TenantId,
+                    projectNames = u.FieldWorkerProfile!.Projects.Any()
+                        ? u.FieldWorkerProfile.Projects.Select(p => p.Name).ToList()
+                        : (string.IsNullOrWhiteSpace(u.FieldWorkerProfile.ProjectName)
+                            ? new List<string>()
+                            : new List<string> { u.FieldWorkerProfile.ProjectName! }),
+                })
                 .ToListAsync();
+
+            if (partner != null)
+            {
+                teamRows = teamRows
+                    .Where(t => PartnerCatalog.MatchesTeam(partner, t.tenantId, t.projectNames))
+                    .ToList();
+            }
+
+            var teams = teamRows.Select(t => new { t.id, t.name }).OrderBy(t => t.name).ToList();
 
             var stations = await _context.Stations
                 .IgnoreQueryFilters()
@@ -164,6 +218,13 @@ namespace GA.Presentation.Controllers
                 .OrderBy(s => s.name)
                 .ToListAsync();
 
+            if (partner != null)
+            {
+                stations = stations
+                    .Where(s => PartnerCatalog.Matches(partner, s.tenantId, s.ownerCompany, s.name))
+                    .ToList();
+            }
+
             var projects = await _context.Projects
                 .IgnoreQueryFilters()
                 .Where(p => !p.IsDeleted &&
@@ -173,6 +234,13 @@ namespace GA.Presentation.Controllers
                 .Select(p => new { id = p.Id, name = p.Name, tenantId = p.TenantId })
                 .OrderBy(p => p.name)
                 .ToListAsync();
+
+            if (partner != null)
+            {
+                projects = projects
+                    .Where(p => PartnerCatalog.Matches(partner, p.tenantId, null, p.name))
+                    .ToList();
+            }
 
             return Ok(new { teams, stations, projects });
         }
@@ -186,18 +254,13 @@ namespace GA.Presentation.Controllers
 
             Guid targetTenantId = tenantId;
 
-            if (tenantId == _trugoTenantId)
-            {
-                targetTenantId = _yesilPanoTenantId;
-            }
-            else if (isSuperAdmin)
+            // Super Admin: dto/personel tenant; istasyon bulunursa istasyon tenant'ı öncelikli
+            if (isSuperAdmin)
             {
                 if (dto.TenantId.HasValue && dto.TenantId.Value != Guid.Empty)
                 {
                     targetTenantId = dto.TenantId.Value;
                 }
-                // 🚀 BÜYÜK SİHİR: Eğer Admin firma seçmemişse ama bir personel atamışsa, 
-                // o personelin hangi firmada olduğuna (TenantId) bak ve iş emrini otomatik olarak oraya zimmetle!
                 else if (dto.AssignedToUserId.HasValue && dto.AssignedToUserId.Value != Guid.Empty)
                 {
                     var assignedUser = await _context.Users
@@ -205,42 +268,41 @@ namespace GA.Presentation.Controllers
                         .FirstOrDefaultAsync(u => u.Id == dto.AssignedToUserId.Value);
 
                     if (assignedUser != null)
-                    {
                         targetTenantId = assignedUser.TenantId;
-                    }
                 }
             }
 
             Guid? cityId = dto.CityId;
             Guid? districtId = dto.DistrictId;
+            Core.Domain.Entities.Station? resolvedStation = null;
 
             if (dto.StationId.HasValue && dto.StationId.Value != Guid.Empty)
             {
-                var station = await _context.Stations
+                resolvedStation = await _context.Stations
                     .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(s => s.Id == dto.StationId.Value && !s.IsDeleted);
 
-                if (station != null)
+                if (resolvedStation != null)
                 {
-                    var resolved = await GeoResolver.ResolveFromStationAsync(_context, station);
+                    var resolved = await GeoResolver.ResolveFromStationAsync(_context, resolvedStation);
                     cityId ??= resolved.CityId;
                     districtId ??= resolved.DistrictId;
 
                     if (string.IsNullOrWhiteSpace(dto.CustomerName))
-                        dto.CustomerName = station.Name;
+                        dto.CustomerName = resolvedStation.Name;
                     if (string.IsNullOrWhiteSpace(dto.Address))
-                        dto.Address = station.Address;
+                        dto.Address = resolvedStation.Address;
                 }
             }
             else if ((!cityId.HasValue || !districtId.HasValue) && !string.IsNullOrWhiteSpace(dto.CustomerName))
             {
-                var stationByName = await _context.Stations
+                resolvedStation = await _context.Stations
                     .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(s => !s.IsDeleted && s.Name.ToLower() == dto.CustomerName.Trim().ToLower());
 
-                if (stationByName != null)
+                if (resolvedStation != null)
                 {
-                    var resolved = await GeoResolver.ResolveFromStationAsync(_context, stationByName);
+                    var resolved = await GeoResolver.ResolveFromStationAsync(_context, resolvedStation);
                     cityId ??= resolved.CityId;
                     districtId ??= resolved.DistrictId;
                 }
@@ -251,6 +313,10 @@ namespace GA.Presentation.Controllers
                 cityId = resolved.CityId;
                 districtId = resolved.DistrictId;
             }
+
+            // İstasyon firması (TRUGO vb.) iş emri tenant'ını belirler
+            if (resolvedStation != null)
+                targetTenantId = resolvedStation.TenantId;
 
             var workOrder = new WorkOrder
             {
@@ -285,7 +351,122 @@ namespace GA.Presentation.Controllers
             _context.WorkOrders.Add(workOrder);
             await _context.SaveChangesAsync();
 
-            return Ok(new { message = "İş emri başarıyla oluşturuldu ve saha ekiplerinin ekranına düştü!" });
+            await _notificationService.NotifyAsync(
+                "WorkOrderCreated",
+                "Yeni iş emri",
+                $"{workOrder.CustomerName}: {workOrder.Title}",
+                workOrder.TenantId,
+                workOrder.Id,
+                userId == Guid.Empty ? null : userId);
+
+            return Ok(new
+            {
+                message = "İş emri başarıyla oluşturuldu ve saha ekiplerinin ekranına düştü!",
+                id = workOrder.Id,
+            });
+        }
+
+        /// <summary>
+        /// Seçili noktalara aynı form alanlarıyla toplu iş emri açar. Sahacı zorunlu.
+        /// POST /api/workorders/bulk
+        /// </summary>
+        [HttpPost("bulk")]
+        public async Task<IActionResult> CreateBulkWorkOrders([FromBody] BulkCreateWorkOrderDto dto)
+        {
+            if (dto.StationIds == null || dto.StationIds.Count == 0)
+                return BadRequest(new { message = "En az bir nokta seçilmelidir." });
+
+            if (!dto.AssignedToUserId.HasValue || dto.AssignedToUserId == Guid.Empty)
+                return BadRequest(new { message = "Sahacı ataması zorunludur." });
+
+            var userId = _currentUserService.UserId;
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            var assignee = await _context.Users
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(u => u.Id == dto.AssignedToUserId.Value
+                                          && !u.IsDeleted && u.IsActive
+                                          && u.FieldWorkerProfile != null);
+            if (assignee == null)
+                return BadRequest(new { message = "Seçilen saha personeli bulunamadı." });
+
+            var stations = await _context.Stations
+                .IgnoreQueryFilters()
+                .Where(s => dto.StationIds.Contains(s.Id) && !s.IsDeleted)
+                .ToListAsync();
+
+            if (stations.Count == 0)
+                return BadRequest(new { message = "Seçilen noktalar bulunamadı." });
+
+            if (!isSuperAdmin)
+                stations = stations.Where(s => s.TenantId == tenantId).ToList();
+
+            var createdIds = new List<Guid>();
+            foreach (var station in stations)
+            {
+                var resolved = await GeoResolver.ResolveFromStationAsync(_context, station);
+                var start = DateTime.SpecifyKind(dto.StartDate, DateTimeKind.Utc);
+                var end = DateTime.SpecifyKind(dto.EndDate, DateTimeKind.Utc);
+                var title = string.IsNullOrWhiteSpace(dto.Title)
+                    ? $"{station.Name} iş emri"
+                    : dto.Title.Replace("{nokta}", station.Name, StringComparison.OrdinalIgnoreCase);
+
+                var workOrder = new WorkOrder
+                {
+                    Title = title,
+                    Description = dto.Description ?? string.Empty,
+                    MobileDescription = dto.MobileDescription ?? string.Empty,
+                    Address = string.IsNullOrWhiteSpace(dto.Address) ? (station.Address ?? "") : dto.Address,
+                    CustomerName = station.Name,
+                    Priority = string.IsNullOrWhiteSpace(dto.Priority) ? "Orta" : dto.Priority,
+                    WorkType = string.IsNullOrWhiteSpace(dto.Type) ? "Arıza" : dto.Type,
+                    WorkCategory = string.IsNullOrWhiteSpace(dto.Category) ? "Arıza Bildirimi" : dto.Category,
+                    StartDate = start,
+                    EndDate = end,
+                    Location = station.Location != null
+                        ? new NetTopologySuite.Geometries.Point(station.Location.X, station.Location.Y) { SRID = 4326 }
+                        : new NetTopologySuite.Geometries.Point(0, 0) { SRID = 4326 },
+                    OperationUserId = dto.OperationUserId,
+                    OpenedByUserId = dto.OpenedByUserId ?? userId,
+                    AssignedToUserId = assignee.Id,
+                    IsPeriodic = dto.IsPeriodic,
+                    RecurrenceInterval = dto.IsPeriodic
+                        ? (string.IsNullOrWhiteSpace(dto.RecurrenceInterval) ? "Aylik" : dto.RecurrenceInterval)
+                        : "None",
+                    NextExecutionDate = dto.IsPeriodic
+                        ? WorkOrderRecurrence.ComputeNextExecution(start, dto.RecurrenceInterval)
+                        : null,
+                    CityId = resolved.CityId,
+                    DistrictId = resolved.DistrictId,
+                    TenantId = isSuperAdmin ? station.TenantId : (tenantId == Guid.Empty ? station.TenantId : tenantId),
+                    Status = "Bekliyor",
+                };
+
+                _context.WorkOrders.Add(workOrder);
+                createdIds.Add(workOrder.Id);
+            }
+
+            await _context.SaveChangesAsync();
+
+            foreach (var id in createdIds)
+            {
+                var wo = await _context.WorkOrders.IgnoreQueryFilters().FirstAsync(w => w.Id == id);
+                await _notificationService.NotifyAsync(
+                    "WorkOrderCreated",
+                    "Toplu iş emri",
+                    $"{wo.CustomerName}: {wo.Title}",
+                    wo.TenantId,
+                    wo.Id,
+                    userId == Guid.Empty ? null : userId);
+            }
+
+            return Ok(new
+            {
+                message = $"{createdIds.Count} iş emri oluşturuldu.",
+                count = createdIds.Count,
+                ids = createdIds,
+            });
         }
 
         /// <summary>
@@ -323,6 +504,14 @@ namespace GA.Presentation.Controllers
                 workOrder.AssignedToUserId = assignee.Id;
                 await _context.SaveChangesAsync();
 
+                await _notificationService.NotifyAsync(
+                    "WorkOrderAssigned",
+                    "İş emri atandı",
+                    $"{workOrder.CustomerName} → {assignee.FullName}",
+                    workOrder.TenantId,
+                    workOrder.Id,
+                    _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId);
+
                 return Ok(new
                 {
                     message = "İş emri personele atandı.",
@@ -333,6 +522,14 @@ namespace GA.Presentation.Controllers
 
             workOrder.AssignedToUserId = null;
             await _context.SaveChangesAsync();
+
+            await _notificationService.NotifyAsync(
+                "WorkOrderAssigned",
+                "Atama kaldırıldı",
+                $"{workOrder.CustomerName}: Atanmamış",
+                workOrder.TenantId,
+                workOrder.Id,
+                _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId);
 
             return Ok(new
             {
@@ -371,6 +568,15 @@ namespace GA.Presentation.Controllers
             }
 
             await _context.SaveChangesAsync();
+
+            await _notificationService.NotifyAsync(
+                "WorkOrderStatusChanged",
+                "İş emri durumu güncellendi",
+                $"{workOrder.CustomerName}: {workOrder.Status}",
+                workOrder.TenantId,
+                workOrder.Id,
+                _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId);
+
             return Ok(new { message = "İş emri statüsü güncellendi.", status = workOrder.Status });
         }
 
@@ -536,6 +742,25 @@ namespace GA.Presentation.Controllers
         public Guid? StationId { get; set; }
         public Guid? CityId { get; set; }
         public Guid? DistrictId { get; set; }
+    }
+
+    public class BulkCreateWorkOrderDto
+    {
+        public List<Guid> StationIds { get; set; } = new();
+        public string Title { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string MobileDescription { get; set; } = string.Empty;
+        public string Address { get; set; } = string.Empty;
+        public string Priority { get; set; } = "Orta";
+        public string Type { get; set; } = "Arıza";
+        public string Category { get; set; } = "Arıza Bildirimi";
+        public DateTime StartDate { get; set; }
+        public DateTime EndDate { get; set; }
+        public Guid? OperationUserId { get; set; }
+        public Guid? OpenedByUserId { get; set; }
+        public Guid? AssignedToUserId { get; set; }
+        public bool IsPeriodic { get; set; }
+        public string RecurrenceInterval { get; set; } = "None";
     }
 
     public class AssignWorkOrderDto

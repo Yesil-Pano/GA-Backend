@@ -1,4 +1,5 @@
-﻿using GA.Core.Domain.Entities;
+﻿using GA.Application.Features.Partners;
+using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.AspNetCore.Authorization;
@@ -29,7 +30,7 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetTeams()
+        public async Task<IActionResult> GetTeams([FromQuery] string? partnerKey)
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
@@ -48,21 +49,23 @@ namespace GA.Presentation.Controllers
                     username = u.Username,
                     email = u.Email,
                     phone = u.PhoneNumber,
+                    tenantId = u.TenantId,
                     project = u.FieldWorkerProfile!.Projects.Any()
                         ? string.Join(", ", u.FieldWorkerProfile.Projects.Select(p => p.Name))
                         : (u.FieldWorkerProfile.ProjectName ?? "-"),
+                    projectNames = u.FieldWorkerProfile.Projects.Any()
+                        ? u.FieldWorkerProfile.Projects.Select(p => p.Name).ToList()
+                        : (string.IsNullOrWhiteSpace(u.FieldWorkerProfile.ProjectName)
+                            ? new List<string>()
+                            : new List<string> { u.FieldWorkerProfile.ProjectName }),
                     projectIds = u.FieldWorkerProfile.Projects.Select(p => p.Id).ToList(),
                     plate = u.FieldWorkerProfile!.VehiclePlate ?? "-",
                     teamLeader = u.FieldWorkerProfile!.TeamLeader ?? "-",
-
-                    // 🚀 YENİ EKLENEN ADRES VE BÖLGE ALANLARI
                     address = u.FieldWorkerProfile!.Address ?? "-",
                     city = u.FieldWorkerProfile!.City ?? "-",
                     district = u.FieldWorkerProfile!.District ?? "-",
-
                     hasLiveLocation = u.Location != null,
                     locationUpdatedAt = u.LocationUpdatedAt,
-
                     position = u.Location != null
                         ? new[] { u.Location.Y, u.Location.X }
                         : (u.FieldWorkerProfile!.HomeLocation != null
@@ -70,11 +73,38 @@ namespace GA.Presentation.Controllers
                             : new[] { 39.92077, 32.85411 })
                 }).ToListAsync();
 
-            return Ok(teams);
+            if (isSuperAdmin)
+            {
+                var partner = PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo;
+                teams = teams
+                    .Where(t => PartnerCatalog.MatchesTeam(partner, t.tenantId, t.projectNames))
+                    .ToList();
+            }
+
+            // FE'ye projectNames alanını sızdırmadan aynısını dön
+            var payload = teams.Select(t => new {
+                t.id,
+                t.name,
+                t.username,
+                t.email,
+                t.phone,
+                t.project,
+                t.projectIds,
+                t.plate,
+                t.teamLeader,
+                t.address,
+                t.city,
+                t.district,
+                t.hasLiveLocation,
+                t.locationUpdatedAt,
+                t.position,
+            });
+
+            return Ok(payload);
         }
 
         [HttpGet("lookups")]
-        public async Task<IActionResult> GetTeamsLookups()
+        public async Task<IActionResult> GetTeamsLookups([FromQuery] string? partnerKey)
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
@@ -87,6 +117,14 @@ namespace GA.Presentation.Controllers
                              (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId)))
                 .Select(p => new { id = p.Id, name = p.Name, tenantId = p.TenantId })
                 .ToListAsync();
+
+            if (isSuperAdmin)
+            {
+                var partner = PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo;
+                projects = projects
+                    .Where(p => PartnerCatalog.Matches(partner, p.tenantId, null, p.name))
+                    .ToList();
+            }
 
             return Ok(projects);
         }

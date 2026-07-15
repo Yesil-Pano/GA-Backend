@@ -1,4 +1,5 @@
 ﻿using GA.Application.Features.Auth.DTOs;
+using GA.Application.Features.Partners;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
@@ -28,17 +29,19 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetStations([FromQuery] Guid? projectId, [FromQuery] Guid? tenantIdFilter)
+        public async Task<IActionResult> GetStations(
+            [FromQuery] Guid? projectId,
+            [FromQuery] Guid? tenantIdFilter,
+            [FromQuery] string? partnerKey)
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
 
+            // Firma kullanıcıları yalnızca kendi tenant istasyonlarını görür.
             var query = _context.Stations
                 .IgnoreQueryFilters()
                 .Where(s => !s.IsDeleted &&
-                            (isSuperAdmin ||
-                             s.TenantId == tenantId ||
-                             (tenantId == _trugoTenantId && s.TenantId == _yesilPanoTenantId)));
+                            (isSuperAdmin || s.TenantId == tenantId));
 
             string? projectName = null;
             Guid? projectTenantId = null;
@@ -61,7 +64,14 @@ namespace GA.Presentation.Controllers
                 projectTenantId = tenantIdFilter.Value;
             }
 
-            if (projectTenantId.HasValue)
+            PartnerDefinition? partner = null;
+            if (isSuperAdmin)
+            {
+                partner = PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo;
+                // TenantId tek başına filtreleme yanlış sonuç verir (OwnerCompany=TRUGO, TenantId=Yeşil Pano tarihsel veri).
+                // Tüm adayları çekip Matches ile (OwnerCompany öncelikli) süzüyoruz.
+            }
+            else if (projectTenantId.HasValue)
             {
                 query = query.Where(s => s.TenantId == projectTenantId.Value);
             }
@@ -71,15 +81,27 @@ namespace GA.Presentation.Controllers
                     id = s.Id,
                     name = s.Name,
                     statusType = s.StatusType,
+                    powerType = s.PowerType,
+                    personnelName = s.PersonnelName,
+                    personnelPhone = s.PersonnelPhone,
+                    edas = s.Edas,
                     city = s.City,
+                    district = s.District,
                     address = s.Address,
+                    pointType = s.PointType,
                     ownerCompany = s.OwnerCompany,
                     tenantId = s.TenantId,
+                    cityId = s.CityId,
+                    districtId = s.DistrictId,
                     position = new[] { s.Location.Y, s.Location.X }
                 }).ToListAsync();
 
-            // Proje adına göre OwnerCompany / isim filtreleme (Trugo ↔ Astor ayrımı)
-            if (!string.IsNullOrWhiteSpace(projectName))
+            if (partner != null)
+            {
+                stations = stations.Where(s =>
+                    PartnerCatalog.Matches(partner, s.tenantId, s.ownerCompany, s.name)).ToList();
+            }
+            else if (!string.IsNullOrWhiteSpace(projectName))
             {
                 var tokens = projectName
                     .Split(new[] { ' ', '-', '/' }, StringSplitOptions.RemoveEmptyEntries)
@@ -96,7 +118,6 @@ namespace GA.Presentation.Controllers
                         return tokens.Any(token => owner.Contains(token) || name.Contains(token));
                     }).ToList();
 
-                    // En az bir eşleşme varsa sahiplik filtresini uygula; yoksa tenant filtresi yeterli kalsın
                     if (ownershipFiltered.Count > 0)
                         stations = ownershipFiltered;
                 }
@@ -114,9 +135,7 @@ namespace GA.Presentation.Controllers
             var station = await _context.Stations
                 .IgnoreQueryFilters()
                 .FirstOrDefaultAsync(s => s.Id == id && !s.IsDeleted &&
-                                          (isSuperAdmin ||
-                                           s.TenantId == tenantId ||
-                                           (tenantId == _trugoTenantId && s.TenantId == _yesilPanoTenantId)));
+                                          (isSuperAdmin || s.TenantId == tenantId));
 
             if (station == null) return NotFound();
 

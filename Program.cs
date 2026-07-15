@@ -1,5 +1,6 @@
 using GA.Application.Features.Auth;
 using GA.Application.Features.Location;
+using GA.Application.Features.Notifications;
 using GA.Application.Features.WorkOrders;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Background;
@@ -26,6 +27,7 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ILocationService, LocationService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+builder.Services.AddScoped<INotificationService, NotificationService>();
 
 // Periyodik iş emri otomasyonu
 builder.Services.Configure<PeriodicWorkOrdersOptions>(

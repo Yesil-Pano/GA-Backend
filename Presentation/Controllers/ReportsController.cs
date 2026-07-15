@@ -1,5 +1,6 @@
 using System.Globalization;
 using ClosedXML.Excel;
+using GA.Application.Features.Partners;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.AspNetCore.Authorization;
@@ -41,6 +42,7 @@ namespace GA.Presentation.Controllers
             [FromQuery] DateTime? startFrom,
             [FromQuery] DateTime? startTo,
             [FromQuery] string? search,
+            [FromQuery] string? partnerKey,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 50)
         {
@@ -50,7 +52,7 @@ namespace GA.Presentation.Controllers
             var query = BuildReportQuery(
                 category, priority, completionType,
                 openedByUserId, assignedToUserId,
-                cityId, districtId, startFrom, startTo, search);
+                cityId, districtId, startFrom, startTo, search, partnerKey);
 
             var total = await query.CountAsync();
 
@@ -120,12 +122,13 @@ namespace GA.Presentation.Controllers
             [FromQuery] Guid? districtId,
             [FromQuery] DateTime? startFrom,
             [FromQuery] DateTime? startTo,
-            [FromQuery] string? search)
+            [FromQuery] string? search,
+            [FromQuery] string? partnerKey)
         {
             var query = BuildReportQuery(
                 category, priority, completionType,
                 openedByUserId, assignedToUserId,
-                cityId, districtId, startFrom, startTo, search);
+                cityId, districtId, startFrom, startTo, search, partnerKey);
 
             var rows = await query
                 .OrderByDescending(w => w.StartDate)
@@ -220,7 +223,8 @@ namespace GA.Presentation.Controllers
             Guid? districtId,
             DateTime? startFrom,
             DateTime? startTo,
-            string? search)
+            string? search,
+            string? partnerKey = null)
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
@@ -233,6 +237,33 @@ namespace GA.Presentation.Controllers
                              w.TenantId == tenantId ||
                              (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
                              (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
+
+            if (isSuperAdmin)
+            {
+                var partner = PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo;
+                var stationRows = _context.Stations
+                    .IgnoreQueryFilters()
+                    .AsNoTracking()
+                    .Where(s => !s.IsDeleted)
+                    .Select(s => new { s.Name, s.TenantId, s.OwnerCompany })
+                    .ToList();
+
+                var partnerStationNames = stationRows
+                    .Where(s => PartnerCatalog.Matches(partner, s.TenantId, s.OwnerCompany, s.Name))
+                    .Select(s => s.Name.Trim().ToLowerInvariant())
+                    .ToHashSet();
+
+                var candidateIds = query.Select(w => new { w.Id, w.CustomerName, w.TenantId }).ToList();
+                var allowedIds = candidateIds
+                    .Where(w =>
+                        (partner.TenantId.HasValue && w.TenantId == partner.TenantId.Value)
+                        || partnerStationNames.Contains((w.CustomerName ?? string.Empty).Trim().ToLowerInvariant())
+                        || PartnerCatalog.Matches(partner, w.TenantId, null, w.CustomerName))
+                    .Select(w => w.Id)
+                    .ToHashSet();
+
+                query = query.Where(w => allowedIds.Contains(w.Id));
+            }
 
             if (!string.IsNullOrWhiteSpace(category))
                 query = query.Where(w => w.WorkCategory == category);
