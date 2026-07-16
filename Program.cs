@@ -1,4 +1,5 @@
 using GA.Application.Features.Auth;
+using GA.Application.Features.Chat;
 using GA.Application.Features.Location;
 using GA.Application.Features.Notifications;
 using GA.Application.Features.WorkOrders;
@@ -7,6 +8,7 @@ using GA.Infrastructure.Background;
 using GA.Infrastructure.Hubs;
 using GA.Infrastructure.Persistence.Context;
 using GA.Infrastructure.Persistence.Repositories;
+using GA.Infrastructure.Persistence.Seed;
 using GA.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -27,7 +29,9 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ILocationService, LocationService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+builder.Services.AddScoped<IUserAccessService, UserAccessService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<IChatService, ChatService>();
 
 // Periyodik iş emri otomasyonu
 builder.Services.Configure<PeriodicWorkOrdersOptions>(
@@ -66,7 +70,8 @@ builder.Services.AddAuthentication(options =>
         {
             var accessToken = context.Request.Query["access_token"];
             var path = context.HttpContext.Request.Path;
-            if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs/location"))
+            if (!string.IsNullOrEmpty(accessToken) &&
+                (path.StartsWithSegments("/hubs/location") || path.StartsWithSegments("/hubs/chat")))
             {
                 context.Token = accessToken;
             }
@@ -84,7 +89,14 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:3000", "http://localhost:5173", "http://localhost:5112")
+        policy.WithOrigins(
+                "http://localhost:3000",
+                "http://localhost:5173",
+                "http://localhost:5112",
+                "https://204.168.249.86:8443",
+                "http://204.168.249.86:8443",
+                "http://204.168.249.86:8080",
+                "http://204.168.249.86:8081")
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
@@ -92,6 +104,12 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    await RoleSeeder.SeedAsync(db);
+}
 
 if (app.Environment.IsDevelopment())
 {
@@ -109,5 +127,6 @@ app.MapControllers();
 
 // SignalR hub endpoint
 app.MapHub<LocationHub>("/hubs/location");
+app.MapHub<ChatHub>("/hubs/chat");
 
 app.Run();

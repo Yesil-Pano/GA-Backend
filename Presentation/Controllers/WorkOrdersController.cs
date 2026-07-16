@@ -540,18 +540,10 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpPut("{id}/status")]
+        [HttpPost("{id}/status")]
         public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UpdateWorkOrderStatusDto dto)
         {
-            var tenantId = _currentUserService.TenantId;
-            var isSuperAdmin = tenantId == Guid.Empty;
-
-            var workOrder = await _context.WorkOrders
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted &&
-                                          (isSuperAdmin ||
-                                           w.TenantId == tenantId ||
-                                           (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId)));
-
+            var workOrder = await FindWorkOrderForMutationAsync(id);
             if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
 
             workOrder.Status = dto.Status;
@@ -581,19 +573,10 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpPut("{id}/schedule")]
+        [HttpPost("{id}/schedule")]
         public async Task<IActionResult> UpdateSchedule(Guid id, [FromBody] UpdateWorkOrderScheduleDto dto)
         {
-            var tenantId = _currentUserService.TenantId;
-            var isSuperAdmin = tenantId == Guid.Empty;
-
-            var workOrder = await _context.WorkOrders
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted &&
-                                          (isSuperAdmin ||
-                                           w.TenantId == tenantId ||
-                                           (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
-                                           (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
-
+            var workOrder = await FindWorkOrderForMutationAsync(id);
             if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
 
             var isArıza = workOrder.WorkType.Contains("Arıza", StringComparison.OrdinalIgnoreCase) ||
@@ -716,6 +699,26 @@ namespace GA.Presentation.Controllers
                     ? workOrder.NextExecutionDate.Value.ToString("yyyy-MM-dd HH:mm")
                     : null,
             });
+        }
+
+        /// <summary>
+        /// Mutasyon için iş emri bul: kendi tenant + Trugo↔YeşilPano çapraz +
+        /// kendisine atanmış iş emri (tenant fark etmez).
+        /// </summary>
+        private async Task<WorkOrder?> FindWorkOrderForMutationAsync(Guid id)
+        {
+            var tenantId = _currentUserService.TenantId;
+            var userId = _currentUserService.UserId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            return await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted &&
+                    (isSuperAdmin ||
+                     w.TenantId == tenantId ||
+                     (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
+                     (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId) ||
+                     (userId != Guid.Empty && w.AssignedToUserId == userId)));
         }
     }
 

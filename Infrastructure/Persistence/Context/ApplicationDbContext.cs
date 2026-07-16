@@ -60,6 +60,11 @@ namespace GA.Infrastructure.Persistence.Context
         public DbSet<District> Districts { get; set; } = null!;
         public DbSet<AppNotification> AppNotifications { get; set; } = null!;
 
+        // Ofis ↔ saha sohbet
+        public DbSet<Conversation> Conversations { get; set; } = null!;
+        public DbSet<ChatMessage> ChatMessages { get; set; } = null!;
+        public DbSet<ChatReadState> ChatReadStates { get; set; } = null!;
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -180,6 +185,36 @@ namespace GA.Infrastructure.Persistence.Context
 
                 entity.HasIndex(s => s.CityId);
                 entity.HasIndex(s => s.DistrictId);
+            });
+
+            modelBuilder.Entity<Conversation>(entity =>
+            {
+                entity.HasIndex(c => new { c.TenantId, c.FieldWorkerUserId })
+                    .IsUnique()
+                    .HasDatabaseName("IX_Conversations_Tenant_FieldWorker");
+                entity.HasMany(c => c.Messages)
+                    .WithOne(m => m.Conversation)
+                    .HasForeignKey(m => m.ConversationId)
+                    .OnDelete(DeleteBehavior.Cascade);
+                entity.HasMany(c => c.ReadStates)
+                    .WithOne(r => r.Conversation)
+                    .HasForeignKey(r => r.ConversationId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<ChatMessage>(entity =>
+            {
+                entity.Property(m => m.Body).HasMaxLength(2000).IsRequired();
+                entity.Property(m => m.ClientMessageId).HasMaxLength(100);
+                entity.HasIndex(m => m.ConversationId);
+                entity.HasIndex(m => new { m.ConversationId, m.SenderUserId, m.ClientMessageId });
+            });
+
+            modelBuilder.Entity<ChatReadState>(entity =>
+            {
+                entity.HasIndex(r => new { r.ConversationId, r.UserId })
+                    .IsUnique()
+                    .HasDatabaseName("IX_ChatReadStates_Conversation_User");
             });
         }
 
