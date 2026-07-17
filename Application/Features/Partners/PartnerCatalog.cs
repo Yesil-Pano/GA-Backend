@@ -4,17 +4,20 @@ namespace GA.Application.Features.Partners
 
     public static class PartnerCatalog
     {
+        public const string AllKey = "all";
+
         public static readonly PartnerDefinition Trugo = new(
             "trugo",
             "Trugo Şarj İstasyonları",
             Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce"),
             ["trugo"]);
 
-        public static readonly PartnerDefinition Unilever = new(
-            "unilever",
-            "Unilever Algida",
+        public static readonly PartnerDefinition Tesla = new(
+            "tesla",
+            "TESLA",
             null,
-            ["unilever", "algida"]);
+            // Eski Unilever Algida verisi + yeni TESLA adı
+            ["tesla", "unilever", "algida"]);
 
         public static readonly PartnerDefinition Astor = new(
             "astor",
@@ -29,11 +32,33 @@ namespace GA.Application.Features.Partners
             ["yeşil", "yesil"]);
 
         public static IReadOnlyList<PartnerDefinition> All { get; } =
-            [Trugo, Unilever, Astor, YesilPano];
+            [Trugo, Tesla, Astor, YesilPano];
+
+        public static bool IsAll(string? partnerKey) =>
+            string.Equals(partnerKey, AllKey, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Super Admin filtre anahtarı. "all" veya boş → filtre yok (null).
+        /// Bilinmeyen key → Trugo (geriye dönük varsayılan).
+        /// Eski "unilever" key → TESLA.
+        /// </summary>
+        public static PartnerDefinition? ResolveFilter(string? partnerKey)
+        {
+            if (IsAll(partnerKey) || string.IsNullOrWhiteSpace(partnerKey))
+                return null;
+
+            var key = partnerKey.Trim();
+            if (key.Equals("unilever", StringComparison.OrdinalIgnoreCase))
+                return Tesla;
+
+            return Find(key) ?? Trugo;
+        }
 
         public static PartnerDefinition? Find(string? key)
         {
             if (string.IsNullOrWhiteSpace(key)) return null;
+            if (key.Trim().Equals("unilever", StringComparison.OrdinalIgnoreCase))
+                return Tesla;
             return All.FirstOrDefault(p =>
                 p.Key.Equals(key.Trim(), StringComparison.OrdinalIgnoreCase));
         }

@@ -98,10 +98,13 @@ namespace GA.Application.Features.Chat
 
             if (isSuperAdmin)
             {
-                var partner = PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo;
-                workers = workers
-                    .Where(w => PartnerCatalog.MatchesTeam(partner, w.TenantId, w.ProjectNames))
-                    .ToList();
+                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                if (partner != null)
+                {
+                    workers = workers
+                        .Where(w => PartnerCatalog.MatchesTeam(partner, w.TenantId, w.ProjectNames))
+                        .ToList();
+                }
             }
 
             var workerIds = workers.Select(w => w.Id).ToList();

@@ -1,5 +1,6 @@
 using System.Globalization;
 using ClosedXML.Excel;
+using GA.Application.Features.Common;
 using GA.Application.Features.Partners;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
@@ -56,7 +57,7 @@ namespace GA.Presentation.Controllers
 
             var total = await query.CountAsync();
 
-            var items = await query
+            var rawItems = await query
                 .OrderByDescending(w => w.StartDate)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
@@ -72,8 +73,11 @@ namespace GA.Presentation.Controllers
                     description = w.Description,
                     mobileDescription = w.MobileDescription,
                     address = w.Address,
-                    startDate = w.StartDate.ToString("yyyy-MM-dd HH:mm"),
-                    endDate = w.EndDate.ToString("yyyy-MM-dd HH:mm"),
+                    startDate = w.StartDate,
+                    endDate = w.EndDate,
+                    startedAt = w.StartedAt,
+                    completedAt = w.CompletedAt,
+                    cancelledAt = w.CancelledAt,
                     openedByUserId = w.OpenedByUserId,
                     openedByUserName = _context.Users.Where(u => u.Id == w.OpenedByUserId).Select(u => u.FullName).FirstOrDefault() ?? "-",
                     assignedToUserId = w.AssignedToUserId,
@@ -97,6 +101,35 @@ namespace GA.Presentation.Controllers
                     assignmentLabel = w.AssignedToUserId == null ? "Atanmamış" : "Atanmış",
                 })
                 .ToListAsync();
+
+            var items = rawItems.Select(w => new
+            {
+                w.id,
+                w.title,
+                w.customerName,
+                w.category,
+                w.type,
+                w.priority,
+                w.status,
+                w.description,
+                w.mobileDescription,
+                w.address,
+                startDate = TurkeyTime.Format(w.startDate),
+                endDate = TurkeyTime.Format(w.endDate),
+                startedAt = TurkeyTime.Format(w.startedAt),
+                completedAt = TurkeyTime.Format(w.completedAt),
+                cancelledAt = TurkeyTime.Format(w.cancelledAt),
+                durationMinutes = TurkeyTime.DurationMinutes(w.startedAt, w.completedAt),
+                w.openedByUserId,
+                w.openedByUserName,
+                w.assignedToUserId,
+                w.assignedToUserName,
+                w.cityId,
+                w.districtId,
+                w.cityName,
+                w.districtName,
+                w.assignmentLabel,
+            }).ToList();
 
             return Ok(new
             {
@@ -146,6 +179,9 @@ namespace GA.Presentation.Controllers
                     w.Address,
                     StartDate = w.StartDate,
                     EndDate = w.EndDate,
+                    StartedAt = w.StartedAt,
+                    CompletedAt = w.CompletedAt,
+                    CancelledAt = w.CancelledAt,
                     OpenedBy = _context.Users.Where(u => u.Id == w.OpenedByUserId).Select(u => u.FullName).FirstOrDefault() ?? "-",
                     AssignedTo = w.AssignedToUserId == null
                         ? "Atanmamış"
@@ -167,7 +203,9 @@ namespace GA.Presentation.Controllers
             [
                 "Nokta", "Başlık", "İş Kategorisi", "İş Tipi", "Öncelik", "Durum",
                 "Genel Açıklama", "Mühendis Açıklaması", "Adres",
-                "Başlangıç", "Bitiş", "İşi Açan", "İş Atanan", "İl", "İlçe", "Atama"
+                "Planlanan Başlangıç", "Planlanan Bitiş",
+                "Gerçek Başlangıç", "Bitiş Tarihi", "İptal Tarihi", "Süre (dk)",
+                "İşi Açan", "İş Atanan", "İl", "İlçe", "Atama"
             ];
 
             for (var c = 0; c < headers.Length; c++)
@@ -181,6 +219,7 @@ namespace GA.Presentation.Controllers
             var rowIdx = 2;
             foreach (var r in rows)
             {
+                var duration = TurkeyTime.DurationMinutes(r.StartedAt, r.CompletedAt);
                 sheet.Cell(rowIdx, 1).Value = r.CustomerName;
                 sheet.Cell(rowIdx, 2).Value = r.Title;
                 sheet.Cell(rowIdx, 3).Value = r.WorkCategory;
@@ -190,13 +229,17 @@ namespace GA.Presentation.Controllers
                 sheet.Cell(rowIdx, 7).Value = r.Description;
                 sheet.Cell(rowIdx, 8).Value = r.MobileDescription;
                 sheet.Cell(rowIdx, 9).Value = r.Address;
-                sheet.Cell(rowIdx, 10).Value = r.StartDate.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
-                sheet.Cell(rowIdx, 11).Value = r.EndDate.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
-                sheet.Cell(rowIdx, 12).Value = r.OpenedBy;
-                sheet.Cell(rowIdx, 13).Value = r.AssignedTo;
-                sheet.Cell(rowIdx, 14).Value = r.City;
-                sheet.Cell(rowIdx, 15).Value = r.District;
-                sheet.Cell(rowIdx, 16).Value = r.Assignment;
+                sheet.Cell(rowIdx, 10).Value = TurkeyTime.Format(r.StartDate);
+                sheet.Cell(rowIdx, 11).Value = TurkeyTime.Format(r.EndDate);
+                sheet.Cell(rowIdx, 12).Value = TurkeyTime.Format(r.StartedAt);
+                sheet.Cell(rowIdx, 13).Value = TurkeyTime.Format(r.CompletedAt);
+                sheet.Cell(rowIdx, 14).Value = TurkeyTime.Format(r.CancelledAt);
+                sheet.Cell(rowIdx, 15).Value = duration.HasValue ? duration.Value : "";
+                sheet.Cell(rowIdx, 16).Value = r.OpenedBy;
+                sheet.Cell(rowIdx, 17).Value = r.AssignedTo;
+                sheet.Cell(rowIdx, 18).Value = r.City;
+                sheet.Cell(rowIdx, 19).Value = r.District;
+                sheet.Cell(rowIdx, 20).Value = r.Assignment;
                 rowIdx++;
             }
 
@@ -240,29 +283,32 @@ namespace GA.Presentation.Controllers
 
             if (isSuperAdmin)
             {
-                var partner = PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo;
-                var stationRows = _context.Stations
-                    .IgnoreQueryFilters()
-                    .AsNoTracking()
-                    .Where(s => !s.IsDeleted)
-                    .Select(s => new { s.Name, s.TenantId, s.OwnerCompany })
-                    .ToList();
+                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                if (partner != null)
+                {
+                    var stationRows = _context.Stations
+                        .IgnoreQueryFilters()
+                        .AsNoTracking()
+                        .Where(s => !s.IsDeleted)
+                        .Select(s => new { s.Name, s.TenantId, s.OwnerCompany })
+                        .ToList();
 
-                var partnerStationNames = stationRows
-                    .Where(s => PartnerCatalog.Matches(partner, s.TenantId, s.OwnerCompany, s.Name))
-                    .Select(s => s.Name.Trim().ToLowerInvariant())
-                    .ToHashSet();
+                    var partnerStationNames = stationRows
+                        .Where(s => PartnerCatalog.Matches(partner, s.TenantId, s.OwnerCompany, s.Name))
+                        .Select(s => s.Name.Trim().ToLowerInvariant())
+                        .ToHashSet();
 
-                var candidateIds = query.Select(w => new { w.Id, w.CustomerName, w.TenantId }).ToList();
-                var allowedIds = candidateIds
-                    .Where(w =>
-                        (partner.TenantId.HasValue && w.TenantId == partner.TenantId.Value)
-                        || partnerStationNames.Contains((w.CustomerName ?? string.Empty).Trim().ToLowerInvariant())
-                        || PartnerCatalog.Matches(partner, w.TenantId, null, w.CustomerName))
-                    .Select(w => w.Id)
-                    .ToHashSet();
+                    var candidateIds = query.Select(w => new { w.Id, w.CustomerName, w.TenantId }).ToList();
+                    var allowedIds = candidateIds
+                        .Where(w =>
+                            (partner.TenantId.HasValue && w.TenantId == partner.TenantId.Value)
+                            || partnerStationNames.Contains((w.CustomerName ?? string.Empty).Trim().ToLowerInvariant())
+                            || PartnerCatalog.Matches(partner, w.TenantId, null, w.CustomerName))
+                        .Select(w => w.Id)
+                        .ToHashSet();
 
-                query = query.Where(w => allowedIds.Contains(w.Id));
+                    query = query.Where(w => allowedIds.Contains(w.Id));
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(category))

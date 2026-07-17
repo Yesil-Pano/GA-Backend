@@ -78,30 +78,33 @@ namespace GA.Presentation.Controllers
 
             if (isSuperAdmin)
             {
-                var partner = PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo;
-                var stationRows = await _context.Stations
-                    .IgnoreQueryFilters()
-                    .AsNoTracking()
-                    .Where(s => !s.IsDeleted)
-                    .Select(s => new { s.Name, s.TenantId, s.OwnerCompany })
-                    .ToListAsync();
+                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                if (partner != null)
+                {
+                    var stationRows = await _context.Stations
+                        .IgnoreQueryFilters()
+                        .AsNoTracking()
+                        .Where(s => !s.IsDeleted)
+                        .Select(s => new { s.Name, s.TenantId, s.OwnerCompany })
+                        .ToListAsync();
 
-                var partnerStationNames = stationRows
-                    .Where(s => PartnerCatalog.Matches(partner, s.TenantId, s.OwnerCompany, s.Name))
-                    .Select(s => s.Name.Trim().ToLowerInvariant())
-                    .ToHashSet();
+                    var partnerStationNames = stationRows
+                        .Where(s => PartnerCatalog.Matches(partner, s.TenantId, s.OwnerCompany, s.Name))
+                        .Select(s => s.Name.Trim().ToLowerInvariant())
+                        .ToHashSet();
 
-                // Bellekte filtrele: EF HashSet+ToLower çevirisi güvenilmez
-                var candidateIds = await query.Select(w => new { w.Id, w.CustomerName, w.TenantId }).ToListAsync();
-                var allowedIds = candidateIds
-                    .Where(w =>
-                        (partner.TenantId.HasValue && w.TenantId == partner.TenantId.Value)
-                        || partnerStationNames.Contains((w.CustomerName ?? string.Empty).Trim().ToLowerInvariant())
-                        || PartnerCatalog.Matches(partner, w.TenantId, null, w.CustomerName))
-                    .Select(w => w.Id)
-                    .ToHashSet();
+                    // Bellekte filtrele: EF HashSet+ToLower çevirisi güvenilmez
+                    var candidateIds = await query.Select(w => new { w.Id, w.CustomerName, w.TenantId }).ToListAsync();
+                    var allowedIds = candidateIds
+                        .Where(w =>
+                            (partner.TenantId.HasValue && w.TenantId == partner.TenantId.Value)
+                            || partnerStationNames.Contains((w.CustomerName ?? string.Empty).Trim().ToLowerInvariant())
+                            || PartnerCatalog.Matches(partner, w.TenantId, null, w.CustomerName))
+                        .Select(w => w.Id)
+                        .ToHashSet();
 
-                query = query.Where(w => allowedIds.Contains(w.Id));
+                    query = query.Where(w => allowedIds.Contains(w.Id));
+                }
             }
 
             var workOrders = await query
@@ -110,6 +113,7 @@ namespace GA.Presentation.Controllers
                     title = w.Title,
                     description = w.Description,
                     customerName = w.CustomerName,
+                    tenantId = w.TenantId,
                     priority = w.Priority,
                     status = w.Status,
                     type = w.WorkType,
@@ -165,7 +169,7 @@ namespace GA.Presentation.Controllers
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
-            var partner = isSuperAdmin ? (PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo) : null;
+            var partner = isSuperAdmin ? PartnerCatalog.ResolveFilter(partnerKey) : null;
 
             var teamRows = await _context.Users
                 .IgnoreQueryFilters()
@@ -546,7 +550,8 @@ namespace GA.Presentation.Controllers
             var workOrder = await FindWorkOrderForMutationAsync(id);
             if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
 
-            workOrder.Status = dto.Status;
+            var status = (dto.Status ?? string.Empty).Trim();
+            workOrder.Status = status;
 
             if (!string.IsNullOrWhiteSpace(dto.FieldNote))
             {
@@ -554,9 +559,25 @@ namespace GA.Presentation.Controllers
                 workOrder.FieldNoteAddedAt = DateTime.UtcNow;
             }
 
-            if (dto.Status == "Tamamlandı" || dto.Status == "İptal" || dto.Status == "İptal Edildi")
+            var now = DateTime.UtcNow;
+
+            // Gerçek başlangıç: ilk "İşe Başla" anı — sonraki geçişlerde korunur
+            if (string.Equals(status, "Devam Ediyor", StringComparison.OrdinalIgnoreCase))
             {
-                workOrder.CompletedAt = DateTime.UtcNow;
+                workOrder.StartedAt ??= now;
+            }
+
+            // Normal kapanış
+            if (string.Equals(status, "Tamamlandı", StringComparison.OrdinalIgnoreCase))
+            {
+                workOrder.CompletedAt ??= now;
+            }
+
+            // İptal — CompletedAt yazılmaz
+            if (string.Equals(status, "İptal", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(status, "İptal Edildi", StringComparison.OrdinalIgnoreCase))
+            {
+                workOrder.CancelledAt ??= now;
             }
 
             await _context.SaveChangesAsync();
@@ -569,24 +590,33 @@ namespace GA.Presentation.Controllers
                 workOrder.Id,
                 _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId);
 
-            return Ok(new { message = "İş emri statüsü güncellendi.", status = workOrder.Status });
+            return Ok(new
+            {
+                message = "İş emri statüsü güncellendi.",
+                status = workOrder.Status,
+                startedAt = workOrder.StartedAt,
+                completedAt = workOrder.CompletedAt,
+                cancelledAt = workOrder.CancelledAt,
+            });
         }
 
         [HttpPut("{id}/schedule")]
         [HttpPost("{id}/schedule")]
         public async Task<IActionResult> UpdateSchedule(Guid id, [FromBody] UpdateWorkOrderScheduleDto dto)
         {
+            // Planlanan tarihler iş emri açıldıktan sonra yalnızca Süper Admin değiştirebilir
+            if (_currentUserService.TenantId != Guid.Empty)
+            {
+                return BadRequest(new
+                {
+                    message = "Planlanan tarihler yalnızca Süper Admin tarafından değiştirilebilir.",
+                });
+            }
+
             var workOrder = await FindWorkOrderForMutationAsync(id);
             if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
 
-            var isArıza = workOrder.WorkType.Contains("Arıza", StringComparison.OrdinalIgnoreCase) ||
-                          workOrder.WorkCategory.Contains("Arıza", StringComparison.OrdinalIgnoreCase);
-
-            if (!isArıza)
-            {
-                workOrder.StartDate = DateTime.SpecifyKind(dto.StartDate, DateTimeKind.Utc);
-            }
-
+            workOrder.StartDate = DateTime.SpecifyKind(dto.StartDate, DateTimeKind.Utc);
             workOrder.EndDate = DateTime.SpecifyKind(dto.EndDate, DateTimeKind.Utc);
 
             if (workOrder.EndDate < workOrder.StartDate)
@@ -627,10 +657,19 @@ namespace GA.Presentation.Controllers
             if (string.IsNullOrWhiteSpace(dto.Title))
                 return BadRequest(new { message = "Başlık zorunludur." });
 
-            var start = DateTime.SpecifyKind(dto.StartDate, DateTimeKind.Utc);
-            var end = DateTime.SpecifyKind(dto.EndDate, DateTimeKind.Utc);
-            if (end < start)
-                return BadRequest(new { message = "Bitiş tarihi başlangıç tarihinden önce olamaz." });
+            // Planlanan tarihler: yalnızca Süper Admin değiştirebilir
+            var start = workOrder.StartDate;
+            var end = workOrder.EndDate;
+            if (isSuperAdmin)
+            {
+                start = DateTime.SpecifyKind(dto.StartDate, DateTimeKind.Utc);
+                end = DateTime.SpecifyKind(dto.EndDate, DateTimeKind.Utc);
+                if (end < start)
+                    return BadRequest(new { message = "Bitiş tarihi başlangıç tarihinden önce olamaz." });
+
+                workOrder.StartDate = start;
+                workOrder.EndDate = end;
+            }
 
             workOrder.Title = dto.Title.Trim();
             workOrder.CustomerName = (dto.CustomerName ?? workOrder.CustomerName).Trim();
@@ -640,8 +679,6 @@ namespace GA.Presentation.Controllers
             workOrder.Priority = string.IsNullOrWhiteSpace(dto.Priority) ? workOrder.Priority : dto.Priority;
             workOrder.WorkType = string.IsNullOrWhiteSpace(dto.Type) ? workOrder.WorkType : dto.Type;
             workOrder.WorkCategory = string.IsNullOrWhiteSpace(dto.Category) ? workOrder.WorkCategory : dto.Category;
-            workOrder.StartDate = start;
-            workOrder.EndDate = end;
             workOrder.Location = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 };
             workOrder.OperationUserId = dto.OperationUserId;
             workOrder.OpenedByUserId = dto.OpenedByUserId;

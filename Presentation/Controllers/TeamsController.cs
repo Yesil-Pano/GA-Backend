@@ -75,19 +75,23 @@ namespace GA.Presentation.Controllers
 
             if (isSuperAdmin)
             {
-                var partner = PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo;
-                teams = teams
-                    .Where(t => PartnerCatalog.MatchesTeam(partner, t.tenantId, t.projectNames))
-                    .ToList();
+                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                if (partner != null)
+                {
+                    teams = teams
+                        .Where(t => PartnerCatalog.MatchesTeam(partner, t.tenantId, t.projectNames))
+                        .ToList();
+                }
             }
 
-            // FE'ye projectNames alanını sızdırmadan aynısını dön
+            // FE'ye projectNames alanını sızdırmadan aynısını dön (tenantId harita renkleri için)
             var payload = teams.Select(t => new {
                 t.id,
                 t.name,
                 t.username,
                 t.email,
                 t.phone,
+                t.tenantId,
                 t.project,
                 t.projectIds,
                 t.plate,
@@ -120,10 +124,13 @@ namespace GA.Presentation.Controllers
 
             if (isSuperAdmin)
             {
-                var partner = PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo;
-                projects = projects
-                    .Where(p => PartnerCatalog.Matches(partner, p.tenantId, null, p.name))
-                    .ToList();
+                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                if (partner != null)
+                {
+                    projects = projects
+                        .Where(p => PartnerCatalog.Matches(partner, p.tenantId, null, p.name))
+                        .ToList();
+                }
             }
 
             return Ok(projects);

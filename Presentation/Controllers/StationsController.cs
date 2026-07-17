@@ -67,9 +67,8 @@ namespace GA.Presentation.Controllers
             PartnerDefinition? partner = null;
             if (isSuperAdmin)
             {
-                partner = PartnerCatalog.Find(partnerKey) ?? PartnerCatalog.Trugo;
-                // TenantId tek başına filtreleme yanlış sonuç verir (OwnerCompany=TRUGO, TenantId=Yeşil Pano tarihsel veri).
-                // Tüm adayları çekip Matches ile (OwnerCompany öncelikli) süzüyoruz.
+                // "all" → filtre yok; aksi halde Matches ile (OwnerCompany öncelikli) süzülür.
+                partner = PartnerCatalog.ResolveFilter(partnerKey);
             }
             else if (projectTenantId.HasValue)
             {
