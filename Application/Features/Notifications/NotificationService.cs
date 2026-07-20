@@ -1,6 +1,5 @@
 using GA.Core.Domain.Entities;
 using GA.Infrastructure.Persistence.Context;
-using Microsoft.EntityFrameworkCore;
 
 namespace GA.Application.Features.Notifications
 {
@@ -13,6 +12,7 @@ namespace GA.Application.Features.Notifications
             Guid tenantId,
             Guid? workOrderId = null,
             Guid? actorUserId = null,
+            Guid? targetUserId = null,
             CancellationToken cancellationToken = default);
     }
 
@@ -32,6 +32,7 @@ namespace GA.Application.Features.Notifications
             Guid tenantId,
             Guid? workOrderId = null,
             Guid? actorUserId = null,
+            Guid? targetUserId = null,
             CancellationToken cancellationToken = default)
         {
             _context.AppNotifications.Add(new AppNotification
@@ -42,6 +43,7 @@ namespace GA.Application.Features.Notifications
                 TenantId = tenantId,
                 WorkOrderId = workOrderId,
                 ActorUserId = actorUserId,
+                TargetUserId = targetUserId,
                 IsRead = false,
             });
             await _context.SaveChangesAsync(cancellationToken);

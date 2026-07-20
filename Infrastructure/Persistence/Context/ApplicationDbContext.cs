@@ -59,6 +59,7 @@ namespace GA.Infrastructure.Persistence.Context
         public DbSet<City> Cities { get; set; } = null!;
         public DbSet<District> Districts { get; set; } = null!;
         public DbSet<AppNotification> AppNotifications { get; set; } = null!;
+        public DbSet<UserPushToken> UserPushTokens { get; set; } = null!;
 
         // Ofis ↔ saha sohbet
         public DbSet<Conversation> Conversations { get; set; } = null!;

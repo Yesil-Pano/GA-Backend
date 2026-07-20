@@ -1,5 +1,8 @@
+using System.Collections.Generic;
 using GA.Application.Features.Chat;
 using GA.Application.Features.Chat.DTOs;
+using GA.Application.Features.Notifications;
+using GA.Core.Interfaces;
 using GA.Infrastructure.Hubs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,11 +17,19 @@ namespace GA.Presentation.Controllers
     {
         private readonly IChatService _chatService;
         private readonly IHubContext<ChatHub> _hub;
+        private readonly IPushNotificationService _pushNotificationService;
+        private readonly ICurrentUserService _currentUserService;
 
-        public ChatController(IChatService chatService, IHubContext<ChatHub> hub)
+        public ChatController(
+            IChatService chatService,
+            IHubContext<ChatHub> hub,
+            IPushNotificationService pushNotificationService,
+            ICurrentUserService currentUserService)
         {
             _chatService = chatService;
             _hub = hub;
+            _pushNotificationService = pushNotificationService;
+            _currentUserService = currentUserService;
         }
 
         /// <summary>Mobil: kendi Operasyon konuşması + son mesajlar.</summary>
@@ -182,6 +193,23 @@ namespace GA.Presentation.Controllers
                     .SendAsync("ConversationUpdated", updatedPayload, ct);
                 await _hub.Clients.Group("tenant-chat-superadmin")
                     .SendAsync("ConversationUpdated", updatedPayload, ct);
+
+                // Saha personeline OS push (ofisten gelen mesajlar)
+                if (fieldWorkerUserId != Guid.Empty &&
+                    fieldWorkerUserId != _currentUserService.UserId)
+                {
+                    var pushBody = dto.Body.Length > 120 ? dto.Body[..120] + "…" : dto.Body;
+                    await _pushNotificationService.SendToUserAsync(
+                        fieldWorkerUserId,
+                        "Yeni mesaj",
+                        pushBody,
+                        new Dictionary<string, object>
+                        {
+                            ["type"] = "ChatMessage",
+                            ["conversationId"] = dto.ConversationId.ToString(),
+                        },
+                        ct);
+                }
 
                 return Ok(dto);
             }

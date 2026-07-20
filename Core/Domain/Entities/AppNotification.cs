@@ -14,6 +14,8 @@ namespace GA.Core.Domain.Entities
         public string Type { get; set; } = string.Empty;
         public Guid? WorkOrderId { get; set; }
         public Guid? ActorUserId { get; set; }
+        /// <summary>Bildirimin hedef kullanıcısı (atanan sahacı). Boşsa tenant geneli (web paneli).</summary>
+        public Guid? TargetUserId { get; set; }
         public Guid TenantId { get; set; }
         public Guid? CustomerId { get; set; }
         public bool IsRead { get; set; }

@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -23,6 +24,7 @@ namespace GA.Presentation.Controllers
         private readonly ICurrentUserService _currentUserService;
         private readonly IPeriodicWorkOrderService _periodicWorkOrderService;
         private readonly INotificationService _notificationService;
+        private readonly IPushNotificationService _pushNotificationService;
 
         private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
         private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
@@ -31,12 +33,14 @@ namespace GA.Presentation.Controllers
             ApplicationDbContext context,
             ICurrentUserService currentUserService,
             IPeriodicWorkOrderService periodicWorkOrderService,
-            INotificationService notificationService)
+            INotificationService notificationService,
+            IPushNotificationService pushNotificationService)
         {
             _context = context;
             _currentUserService = currentUserService;
             _periodicWorkOrderService = periodicWorkOrderService;
             _notificationService = notificationService;
+            _pushNotificationService = pushNotificationService;
         }
 
         /// <summary>
@@ -246,7 +250,24 @@ namespace GA.Presentation.Controllers
                     .ToList();
             }
 
-            return Ok(new { teams, stations, projects });
+            return Ok(new {
+                teams,
+                stations,
+                projects,
+                types = new[] { "Arıza", "Bakım", "Kurulum", "Keşif", "Saha Operasyonu" },
+                categories = new[] {
+                    "Arıza Bildirimi",
+                    "YG İşletme Sorumluluğu Talebi",
+                    "YG Bakım",
+                    "AG Bakım",
+                    "Kapasitif Ceza",
+                    "QR, Etiket ve Görsel Kontrol",
+                    "Duba, Stopper ve Çevre Kontrol",
+                    "Periyodik Bakım",
+                    "Devreye Alma",
+                    "Altyapı İncelemesi",
+                },
+            });
         }
 
         [HttpPost]
@@ -355,13 +376,38 @@ namespace GA.Presentation.Controllers
             _context.WorkOrders.Add(workOrder);
             await _context.SaveChangesAsync();
 
-            await _notificationService.NotifyAsync(
-                "WorkOrderCreated",
-                "Yeni iş emri",
-                $"{workOrder.CustomerName}: {workOrder.Title}",
-                workOrder.TenantId,
-                workOrder.Id,
-                userId == Guid.Empty ? null : userId);
+            // Atanan sahacıya bildirim (yalnızca o kullanıcıya)
+            if (workOrder.AssignedToUserId.HasValue && workOrder.AssignedToUserId != Guid.Empty)
+            {
+                await _notificationService.NotifyAsync(
+                    "WorkOrderAssigned",
+                    "Size iş emri atandı",
+                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    workOrder.TenantId,
+                    workOrder.Id,
+                    userId == Guid.Empty ? null : userId,
+                    workOrder.AssignedToUserId);
+
+                await _pushNotificationService.SendToUserAsync(
+                    workOrder.AssignedToUserId.Value,
+                    "Size iş emri atandı",
+                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    new Dictionary<string, object>
+                    {
+                        ["type"] = "WorkOrderAssigned",
+                        ["workOrderId"] = workOrder.Id.ToString(),
+                    });
+            }
+            else
+            {
+                await _notificationService.NotifyAsync(
+                    "WorkOrderCreated",
+                    "Yeni iş emri",
+                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    workOrder.TenantId,
+                    workOrder.Id,
+                    userId == Guid.Empty ? null : userId);
+            }
 
             return Ok(new
             {
@@ -457,12 +503,26 @@ namespace GA.Presentation.Controllers
             {
                 var wo = await _context.WorkOrders.IgnoreQueryFilters().FirstAsync(w => w.Id == id);
                 await _notificationService.NotifyAsync(
-                    "WorkOrderCreated",
-                    "Toplu iş emri",
+                    "WorkOrderAssigned",
+                    "Size iş emri atandı",
                     $"{wo.CustomerName}: {wo.Title}",
                     wo.TenantId,
                     wo.Id,
-                    userId == Guid.Empty ? null : userId);
+                    userId == Guid.Empty ? null : userId,
+                    wo.AssignedToUserId);
+
+                if (wo.AssignedToUserId.HasValue && wo.AssignedToUserId != Guid.Empty)
+                {
+                    await _pushNotificationService.SendToUserAsync(
+                        wo.AssignedToUserId.Value,
+                        "Size iş emri atandı",
+                        $"{wo.CustomerName}: {wo.Title}",
+                        new Dictionary<string, object>
+                        {
+                            ["type"] = "WorkOrderAssigned",
+                            ["workOrderId"] = wo.Id.ToString(),
+                        });
+                }
             }
 
             return Ok(new
@@ -506,24 +566,43 @@ namespace GA.Presentation.Controllers
                     return BadRequest(new { message = "Seçilen saha personeli bulunamadı veya aktif değil." });
 
                 workOrder.AssignedToUserId = assignee.Id;
+                // Sahacı atanınca operasyon sorumlusu ve işi açan yetkili de aynı kişiye çekilir
+                workOrder.OperationUserId = assignee.Id;
+                workOrder.OpenedByUserId = assignee.Id;
                 await _context.SaveChangesAsync();
 
                 await _notificationService.NotifyAsync(
                     "WorkOrderAssigned",
-                    "İş emri atandı",
-                    $"{workOrder.CustomerName} → {assignee.FullName}",
+                    "Size iş emri atandı",
+                    $"{workOrder.CustomerName}: {workOrder.Title}",
                     workOrder.TenantId,
                     workOrder.Id,
-                    _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId);
+                    _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId,
+                    assignee.Id);
+
+                await _pushNotificationService.SendToUserAsync(
+                    assignee.Id,
+                    "Size iş emri atandı",
+                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    new Dictionary<string, object>
+                    {
+                        ["type"] = "WorkOrderAssigned",
+                        ["workOrderId"] = workOrder.Id.ToString(),
+                    });
 
                 return Ok(new
                 {
                     message = "İş emri personele atandı.",
                     assignedToUserId = assignee.Id,
                     assignedToUserName = assignee.FullName,
+                    operationUserId = assignee.Id,
+                    operationUserName = assignee.FullName,
+                    openedByUserId = assignee.Id,
+                    openedByUserName = assignee.FullName,
                 });
             }
 
+            var previousAssignee = workOrder.AssignedToUserId;
             workOrder.AssignedToUserId = null;
             await _context.SaveChangesAsync();
 
@@ -533,7 +612,8 @@ namespace GA.Presentation.Controllers
                 $"{workOrder.CustomerName}: Atanmamış",
                 workOrder.TenantId,
                 workOrder.Id,
-                _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId);
+                _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId,
+                previousAssignee);
 
             return Ok(new
             {
@@ -588,7 +668,8 @@ namespace GA.Presentation.Controllers
                 $"{workOrder.CustomerName}: {workOrder.Status}",
                 workOrder.TenantId,
                 workOrder.Id,
-                _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId);
+                _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId,
+                workOrder.AssignedToUserId);
 
             return Ok(new
             {
@@ -598,6 +679,63 @@ namespace GA.Presentation.Controllers
                 completedAt = workOrder.CompletedAt,
                 cancelledAt = workOrder.CancelledAt,
             });
+        }
+
+        /// <summary>Soft-delete. DELETE /api/workorders/{id}</summary>
+        [HttpDelete("{id:guid}")]
+        public async Task<IActionResult> DeleteWorkOrder(Guid id)
+        {
+            var workOrder = await FindWorkOrderForMutationAsync(id);
+            if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
+
+            workOrder.IsDeleted = true;
+            workOrder.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "İş emri silindi." });
+        }
+
+        /// <summary>Toplu soft-delete. POST /api/workorders/bulk-delete</summary>
+        [HttpPost("bulk-delete")]
+        public async Task<IActionResult> BulkDelete([FromBody] BulkIdsDto dto)
+        {
+            if (dto.Ids == null || dto.Ids.Count == 0)
+                return BadRequest(new { message = "En az bir iş emri seçilmelidir." });
+
+            var deleted = 0;
+            foreach (var id in dto.Ids.Distinct())
+            {
+                var workOrder = await FindWorkOrderForMutationAsync(id);
+                if (workOrder == null) continue;
+                workOrder.IsDeleted = true;
+                workOrder.UpdatedAt = DateTime.UtcNow;
+                deleted++;
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { message = $"{deleted} iş emri silindi.", count = deleted });
+        }
+
+        /// <summary>Toplu onay (Tamamlandı). POST /api/workorders/bulk-approve</summary>
+        [HttpPost("bulk-approve")]
+        public async Task<IActionResult> BulkApprove([FromBody] BulkIdsDto dto)
+        {
+            if (dto.Ids == null || dto.Ids.Count == 0)
+                return BadRequest(new { message = "En az bir iş emri seçilmelidir." });
+
+            var now = DateTime.UtcNow;
+            var updated = 0;
+            foreach (var id in dto.Ids.Distinct())
+            {
+                var workOrder = await FindWorkOrderForMutationAsync(id);
+                if (workOrder == null) continue;
+                workOrder.Status = "Tamamlandı";
+                workOrder.CompletedAt ??= now;
+                workOrder.UpdatedAt = now;
+                updated++;
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { message = $"{updated} iş emri onaylandı.", count = updated });
         }
 
         [HttpPut("{id}/schedule")]
@@ -841,5 +979,10 @@ namespace GA.Presentation.Controllers
         public string RecurrenceInterval { get; set; } = "None";
         public Guid? CityId { get; set; }
         public Guid? DistrictId { get; set; }
+    }
+
+    public class BulkIdsDto
+    {
+        public List<Guid> Ids { get; set; } = new();
     }
 }

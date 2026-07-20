@@ -31,6 +31,13 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<IUserAccessService, UserAccessService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<IPushNotificationService, ExpoPushNotificationService>();
+builder.Services.AddHttpClient("expo-push", client =>
+{
+    client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
+    client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+    client.Timeout = TimeSpan.FromSeconds(20);
+});
 builder.Services.AddScoped<IChatService, ChatService>();
 
 // Periyodik iş emri otomasyonu

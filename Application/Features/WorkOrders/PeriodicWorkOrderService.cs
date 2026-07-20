@@ -116,6 +116,7 @@ namespace GA.Application.Features.WorkOrders
                         wo.TenantId,
                         wo.Id,
                         null,
+                        wo.AssignedToUserId,
                         cancellationToken);
                 }
             }
