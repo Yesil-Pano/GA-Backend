@@ -1,4 +1,5 @@
 ﻿using GA.Application.Features.Auth.DTOs;
+using GA.Application.Features.Geo;
 using GA.Application.Features.Partners;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
@@ -173,6 +174,72 @@ namespace GA.Presentation.Controllers
             _context.Stations.Add(station);
             await _context.SaveChangesAsync();
             return Ok(new { message = "Saha noktası başarıyla oluşturuldu!" });
+        }
+
+        [HttpPut("{id:guid}")]
+        public async Task<IActionResult> UpdateStation(Guid id, [FromBody] UpdateStationDto dto)
+        {
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            var station = await _context.Stations
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(s => s.Id == id && !s.IsDeleted &&
+                                          (isSuperAdmin || s.TenantId == tenantId));
+
+            if (station == null) return NotFound(new { message = "İstasyon bulunamadı." });
+
+            if (string.IsNullOrWhiteSpace(dto.Name))
+                return BadRequest(new { message = "İstasyon adı zorunludur." });
+
+            if (dto.Latitude is < 35 or > 43 || dto.Longitude is < 25 or > 45)
+                return BadRequest(new { message = "Koordinatlar Türkiye sınırları dışında görünüyor." });
+
+            station.Name = dto.Name.Trim();
+            station.StatusType = string.IsNullOrWhiteSpace(dto.StatusType) ? station.StatusType : dto.StatusType.Trim();
+            station.PowerType = string.IsNullOrWhiteSpace(dto.PowerType) ? "-" : dto.PowerType.Trim();
+            station.PersonnelName = string.IsNullOrWhiteSpace(dto.PersonnelName) ? "-" : dto.PersonnelName.Trim();
+            station.PersonnelPhone = string.IsNullOrWhiteSpace(dto.PersonnelPhone) ? "-" : dto.PersonnelPhone.Trim();
+            station.Edas = string.IsNullOrWhiteSpace(dto.Edas) ? "-" : dto.Edas.Trim();
+            station.Address = string.IsNullOrWhiteSpace(dto.Address) ? "-" : dto.Address.Trim();
+            station.PointType = string.IsNullOrWhiteSpace(dto.PointType) ? station.PointType : dto.PointType.Trim();
+            station.City = string.IsNullOrWhiteSpace(dto.City) ? station.City : dto.City.Trim();
+            station.District = string.IsNullOrWhiteSpace(dto.District) ? null : dto.District.Trim();
+            station.OwnerCompany = string.IsNullOrWhiteSpace(dto.OwnerCompany) ? station.OwnerCompany : dto.OwnerCompany.Trim();
+            station.Location = new Point(dto.Longitude, dto.Latitude) { SRID = 4326 };
+            station.UpdatedAt = DateTime.UtcNow;
+
+            var (resolvedCityId, resolvedDistrictId) = await GeoResolver.ResolveAsync(
+                _context,
+                null,
+                null,
+                station.City,
+                station.District);
+
+            station.CityId = resolvedCityId;
+            station.DistrictId = resolvedDistrictId;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "İstasyon güncellendi.",
+                id = station.Id,
+                name = station.Name,
+                statusType = station.StatusType,
+                powerType = station.PowerType,
+                personnelName = station.PersonnelName,
+                personnelPhone = station.PersonnelPhone,
+                edas = station.Edas,
+                address = station.Address,
+                pointType = station.PointType,
+                city = station.City,
+                district = station.District,
+                ownerCompany = station.OwnerCompany,
+                cityId = station.CityId,
+                districtId = station.DistrictId,
+                position = new[] { station.Location.Y, station.Location.X }
+            });
         }
     }
 }
