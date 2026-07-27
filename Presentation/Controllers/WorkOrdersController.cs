@@ -1,6 +1,7 @@
 ﻿using GA.Application.Features.Geo;
 using GA.Application.Features.Notifications;
 using GA.Application.Features.Partners;
+using GA.Application.Features.Translation;
 using GA.Application.Features.WorkOrders;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
@@ -25,6 +26,7 @@ namespace GA.Presentation.Controllers
         private readonly IPeriodicWorkOrderService _periodicWorkOrderService;
         private readonly INotificationService _notificationService;
         private readonly IPushNotificationService _pushNotificationService;
+        private readonly ITranslationService _translationService;
 
         private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
         private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
@@ -34,13 +36,15 @@ namespace GA.Presentation.Controllers
             ICurrentUserService currentUserService,
             IPeriodicWorkOrderService periodicWorkOrderService,
             INotificationService notificationService,
-            IPushNotificationService pushNotificationService)
+            IPushNotificationService pushNotificationService,
+            ITranslationService translationService)
         {
             _context = context;
             _currentUserService = currentUserService;
             _periodicWorkOrderService = periodicWorkOrderService;
             _notificationService = notificationService;
             _pushNotificationService = pushNotificationService;
+            _translationService = translationService;
         }
 
         /// <summary>
@@ -155,6 +159,15 @@ namespace GA.Presentation.Controllers
                     fieldNote = w.FieldNote,
                     fieldNoteAddedAt = w.FieldNoteAddedAt.HasValue
                         ? w.FieldNoteAddedAt.Value.ToString("yyyy-MM-dd HH:mm")
+                        : null,
+
+                    titleEn = w.TitleEn,
+                    descriptionEn = w.DescriptionEn,
+                    mobileDescriptionEn = w.MobileDescriptionEn,
+                    fieldNoteEn = w.FieldNoteEn,
+                    translationProvider = w.TranslationProvider,
+                    translatedAt = w.TranslatedAt.HasValue
+                        ? w.TranslatedAt.Value.ToString("yyyy-MM-dd HH:mm")
                         : null,
 
                     cityId = w.CityId,
@@ -637,6 +650,7 @@ namespace GA.Presentation.Controllers
             {
                 workOrder.FieldNote = dto.FieldNote.Trim();
                 workOrder.FieldNoteAddedAt = DateTime.UtcNow;
+                workOrder.FieldNoteEn = null;
             }
 
             var now = DateTime.UtcNow;
@@ -773,6 +787,50 @@ namespace GA.Presentation.Controllers
         }
 
         /// <summary>
+        /// İş emri metinlerini EN'ye çevirir (Gemini → Groq failover) ve DB'ye yazar.
+        /// POST /api/workorders/{id}/translate
+        /// </summary>
+        [HttpPost("{id:guid}/translate")]
+        public async Task<IActionResult> TranslateWorkOrder(Guid id)
+        {
+            var workOrder = await FindWorkOrderForMutationAsync(id);
+            if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
+
+            try
+            {
+                var result = await _translationService.TranslateWorkOrderAsync(
+                    workOrder.Title,
+                    workOrder.Description,
+                    workOrder.MobileDescription,
+                    workOrder.FieldNote);
+
+                workOrder.TitleEn = result.TitleEn;
+                workOrder.DescriptionEn = result.DescriptionEn;
+                workOrder.MobileDescriptionEn = result.MobileDescriptionEn;
+                workOrder.FieldNoteEn = result.FieldNoteEn;
+                workOrder.TranslationProvider = result.Provider;
+                workOrder.TranslatedAt = DateTime.UtcNow;
+                workOrder.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    message = $"Çeviri tamamlandı ({result.Provider}).",
+                    titleEn = workOrder.TitleEn,
+                    descriptionEn = workOrder.DescriptionEn,
+                    mobileDescriptionEn = workOrder.MobileDescriptionEn,
+                    fieldNoteEn = workOrder.FieldNoteEn,
+                    translationProvider = workOrder.TranslationProvider,
+                    translatedAt = workOrder.TranslatedAt?.ToString("yyyy-MM-dd HH:mm"),
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(502, new { message = $"Çeviri başarısız: {ex.Message}" });
+            }
+        }
+
+        /// <summary>
         /// İş emri detay alanlarını günceller.
         /// PUT /api/workorders/{id}
         /// </summary>
@@ -814,6 +872,13 @@ namespace GA.Presentation.Controllers
             workOrder.Description = dto.Description ?? string.Empty;
             workOrder.MobileDescription = dto.MobileDescription ?? string.Empty;
             workOrder.Address = dto.Address ?? string.Empty;
+            // TR metin değiştiğinde eski EN çevirileri geçersiz say
+            workOrder.TitleEn = null;
+            workOrder.DescriptionEn = null;
+            workOrder.MobileDescriptionEn = null;
+            workOrder.FieldNoteEn = null;
+            workOrder.TranslationProvider = null;
+            workOrder.TranslatedAt = null;
             workOrder.Priority = string.IsNullOrWhiteSpace(dto.Priority) ? workOrder.Priority : dto.Priority;
             workOrder.WorkType = string.IsNullOrWhiteSpace(dto.Type) ? workOrder.WorkType : dto.Type;
             workOrder.WorkCategory = string.IsNullOrWhiteSpace(dto.Category) ? workOrder.WorkCategory : dto.Category;

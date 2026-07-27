@@ -1,6 +1,7 @@
 ﻿using GA.Application.Features.Auth.DTOs;
 using GA.Application.Features.Geo;
 using GA.Application.Features.Partners;
+using GA.Core.Domain.Constants;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
@@ -170,7 +171,7 @@ namespace GA.Presentation.Controllers
             var tenantId = _currentUserService.TenantId;
             if (tenantId == Guid.Empty) return Unauthorized();
 
-            var station = new Station { Name = dto.Name, StatusType = dto.StatusType, PowerType = dto.PowerType, PersonnelName = dto.PersonnelName, PersonnelPhone = dto.PersonnelPhone, Edas = dto.Edas, Address = dto.Address, PointType = dto.PointType, City = dto.City, Location = new Point(dto.Longitude, dto.Latitude) { SRID = 4326 }, TenantId = tenantId };
+            var station = new Station { Name = dto.Name, StatusType = StationStatusTypes.NormalizeOrDefault(dto.StatusType), PowerType = dto.PowerType, PersonnelName = dto.PersonnelName, PersonnelPhone = dto.PersonnelPhone, Edas = dto.Edas, Address = dto.Address, PointType = dto.PointType, City = dto.City, Location = new Point(dto.Longitude, dto.Latitude) { SRID = 4326 }, TenantId = tenantId };
             _context.Stations.Add(station);
             await _context.SaveChangesAsync();
             return Ok(new { message = "Saha noktası başarıyla oluşturuldu!" });
@@ -196,7 +197,7 @@ namespace GA.Presentation.Controllers
                 return BadRequest(new { message = "Koordinatlar Türkiye sınırları dışında görünüyor." });
 
             station.Name = dto.Name.Trim();
-            station.StatusType = string.IsNullOrWhiteSpace(dto.StatusType) ? station.StatusType : dto.StatusType.Trim();
+            station.StatusType = StationStatusTypes.NormalizeOrDefault(dto.StatusType, station.StatusType);
             station.PowerType = string.IsNullOrWhiteSpace(dto.PowerType) ? "-" : dto.PowerType.Trim();
             station.PersonnelName = string.IsNullOrWhiteSpace(dto.PersonnelName) ? "-" : dto.PersonnelName.Trim();
             station.PersonnelPhone = string.IsNullOrWhiteSpace(dto.PersonnelPhone) ? "-" : dto.PersonnelPhone.Trim();

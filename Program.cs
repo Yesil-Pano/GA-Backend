@@ -2,6 +2,7 @@ using GA.Application.Features.Auth;
 using GA.Application.Features.Chat;
 using GA.Application.Features.Location;
 using GA.Application.Features.Notifications;
+using GA.Application.Features.Translation;
 using GA.Application.Features.WorkOrders;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Background;
@@ -10,12 +11,25 @@ using GA.Infrastructure.Persistence.Context;
 using GA.Infrastructure.Persistence.Repositories;
 using GA.Infrastructure.Persistence.Seed;
 using GA.Infrastructure.Services;
+using GA.Presentation.Middleware;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Yetki belgesi PDF yükleme (max ~27 MB + pay)
+const long MaxUploadBytes = 30L * 1024 * 1024;
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = MaxUploadBytes;
+});
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = MaxUploadBytes;
+});
 
 // PostgreSQL + NetTopologySuite
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -39,6 +53,16 @@ builder.Services.AddHttpClient("expo-push", client =>
     client.Timeout = TimeSpan.FromSeconds(20);
 });
 builder.Services.AddScoped<IChatService, ChatService>();
+
+builder.Services.Configure<TranslationOptions>(
+    builder.Configuration.GetSection(TranslationOptions.SectionName));
+builder.Services.AddHttpClient("translation", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(60);
+});
+builder.Services.AddScoped<ITranslationService, TranslationService>();
+
+builder.Services.AddMemoryCache();
 
 // Periyodik iş emri otomasyonu
 builder.Services.Configure<PeriodicWorkOrdersOptions>(
@@ -129,6 +153,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseCors("AllowFrontend");
 app.UseAuthentication();
+app.UseMiddleware<TenantDemoAccessMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 

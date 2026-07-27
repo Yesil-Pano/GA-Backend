@@ -1,12 +1,16 @@
-﻿using GA.Application.Features.Partners;
+﻿using GA.Application.Features.Auth;
+using GA.Application.Features.Partners;
+using GA.Core.Domain.Constants;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -17,16 +21,30 @@ namespace GA.Presentation.Controllers
     [Authorize]
     public class TeamsController : ControllerBase
     {
+        private const long MaxDocumentBytes = 27L * 1024 * 1024;
+        private const int MaxPersonnelDocuments = 10;
+
+        private static readonly HashSet<string> PersonnelAllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".pdf", ".jpg", ".jpeg", ".png", ".webp",
+            ".doc", ".docx", ".xls", ".xlsx",
+        };
+
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
+        private readonly IUserAccessService _userAccessService;
 
         private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
         private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
 
-        public TeamsController(ApplicationDbContext context, ICurrentUserService currentUserService)
+        public TeamsController(
+            ApplicationDbContext context,
+            ICurrentUserService currentUserService,
+            IUserAccessService userAccessService)
         {
             _context = context;
             _currentUserService = currentUserService;
+            _userAccessService = userAccessService;
         }
 
         [HttpGet]
@@ -59,11 +77,26 @@ namespace GA.Presentation.Controllers
                             ? new List<string>()
                             : new List<string> { u.FieldWorkerProfile.ProjectName }),
                     projectIds = u.FieldWorkerProfile.Projects.Select(p => p.Id).ToList(),
+                    assignedProjects = u.FieldWorkerProfile.Projects
+                        .Select(p => new { id = p.Id, name = p.Name })
+                        .ToList(),
                     plate = u.FieldWorkerProfile!.VehiclePlate ?? "-",
                     teamLeader = u.FieldWorkerProfile!.TeamLeader ?? "-",
                     address = u.FieldWorkerProfile!.Address ?? "-",
                     city = u.FieldWorkerProfile!.City ?? "-",
                     district = u.FieldWorkerProfile!.District ?? "-",
+                    hasAuthorizationDocument = u.FieldWorkerProfile!.Documents.Any(d =>
+                        !d.IsDeleted && d.DocumentType == FieldWorkerDocumentTypes.Authorization && d.FileSize > 0),
+                    authorizationDocumentFileName = u.FieldWorkerProfile.Documents
+                        .Where(d => !d.IsDeleted && d.DocumentType == FieldWorkerDocumentTypes.Authorization)
+                        .Select(d => d.FileName)
+                        .FirstOrDefault(),
+                    authorizationDocumentFileSize = u.FieldWorkerProfile.Documents
+                        .Where(d => !d.IsDeleted && d.DocumentType == FieldWorkerDocumentTypes.Authorization)
+                        .Select(d => (long?)d.FileSize)
+                        .FirstOrDefault(),
+                    personnelDocumentCount = u.FieldWorkerProfile.Documents.Count(d =>
+                        !d.IsDeleted && d.DocumentType == FieldWorkerDocumentTypes.Personnel),
                     hasLiveLocation = u.Location != null,
                     locationUpdatedAt = u.LocationUpdatedAt,
                     position = u.Location != null
@@ -99,6 +132,9 @@ namespace GA.Presentation.Controllers
                 t.address,
                 t.city,
                 t.district,
+                t.hasAuthorizationDocument,
+                t.authorizationDocumentFileName,
+                t.authorizationDocumentFileSize,
                 t.hasLiveLocation,
                 t.locationUpdatedAt,
                 t.position,
@@ -134,6 +170,16 @@ namespace GA.Presentation.Controllers
             }
 
             return Ok(projects);
+        }
+
+        [HttpGet("capabilities")]
+        public async Task<IActionResult> GetCapabilities()
+        {
+            var canManage = await _userAccessService.IsTenantAdminOrAboveAsync();
+            return Ok(new
+            {
+                canManageAuthorizationDocuments = canManage,
+            });
         }
 
         [HttpPost]
@@ -335,6 +381,340 @@ namespace GA.Presentation.Controllers
             profile.HomeLocation = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 };
             await _context.SaveChangesAsync();
             return Ok(new { message = "Saha konumu merkeze başarıyla raporlandı." });
+        }
+
+        /// <summary>
+        /// Personel evrak listesi (metadata; binary yok).
+        /// GET /api/teams/{id}/documents
+        /// </summary>
+        [HttpGet("{id:guid}/documents")]
+        public async Task<IActionResult> ListDocuments(Guid id, [FromQuery] string? type = null)
+        {
+            if (!await _userAccessService.IsTenantAdminOrAboveAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Evrakları görüntülemek için Super Admin veya Firma Admin olmalısınız." });
+
+            var profile = await FindAccessibleProfileAsync(id);
+            if (profile == null)
+                return NotFound(new { message = "Ekip profili bulunamadı veya yetkiniz yetersiz." });
+
+            var query = _context.FieldWorkerDocuments
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(d => d.FieldWorkerProfileId == profile.Id && !d.IsDeleted);
+
+            if (!string.IsNullOrWhiteSpace(type))
+            {
+                var normalized = NormalizeDocumentType(type);
+                if (normalized == null)
+                    return BadRequest(new { message = "Geçersiz belge tipi. Authorization veya Personnel kullanın." });
+                query = query.Where(d => d.DocumentType == normalized);
+            }
+
+            var items = await query
+                .OrderByDescending(d => d.UploadedAt)
+                .Select(d => new
+                {
+                    id = d.Id,
+                    documentType = d.DocumentType,
+                    fileName = d.FileName,
+                    contentType = d.ContentType,
+                    fileSize = d.FileSize,
+                    uploadedAt = d.UploadedAt.ToString("yyyy-MM-dd HH:mm"),
+                })
+                .ToListAsync();
+
+            return Ok(new
+            {
+                authorizationCount = items.Count(i => i.documentType == FieldWorkerDocumentTypes.Authorization),
+                personnelCount = items.Count(i => i.documentType == FieldWorkerDocumentTypes.Personnel),
+                items,
+            });
+        }
+
+        /// <summary>
+        /// Evrak yükle.
+        /// POST /api/teams/{id}/documents?type=Authorization|Personnel
+        /// Yetki Belgesi: tek PDF (varsa değiştirilir). Personel: max 10, PDF/görsel/Office.
+        /// </summary>
+        [HttpPost("{id:guid}/documents")]
+        [RequestSizeLimit(30L * 1024 * 1024)]
+        [RequestFormLimits(MultipartBodyLengthLimit = 30L * 1024 * 1024)]
+        public async Task<IActionResult> UploadDocument(Guid id, [FromQuery] string type, IFormFile file)
+        {
+            if (!await _userAccessService.IsTenantAdminOrAboveAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Evrak yüklemek için Super Admin veya Firma Admin olmalısınız." });
+
+            var documentType = NormalizeDocumentType(type);
+            if (documentType == null)
+                return BadRequest(new { message = "type zorunlu: Authorization veya Personnel." });
+
+            if (file == null || file.Length == 0)
+                return BadRequest(new { message = "Lütfen bir dosya seçin." });
+
+            if (file.Length > MaxDocumentBytes)
+                return BadRequest(new { message = "Dosya boyutu en fazla 27 MB olabilir." });
+
+            var profile = await FindAccessibleProfileAsync(id);
+            if (profile == null)
+                return NotFound(new { message = "Ekip profili bulunamadı veya yetkiniz yetersiz." });
+
+            var fileName = Path.GetFileName(file.FileName ?? "document");
+            var ext = Path.GetExtension(fileName).ToLowerInvariant();
+            var contentType = (file.ContentType ?? "").ToLowerInvariant();
+
+            await using var ms = new MemoryStream();
+            await file.CopyToAsync(ms);
+            var bytes = ms.ToArray();
+
+            if (documentType == FieldWorkerDocumentTypes.Authorization)
+            {
+                var isPdf = contentType.Contains("pdf") || ext == ".pdf";
+                if (!isPdf)
+                    return BadRequest(new { message = "Yetki Belgesi yalnızca PDF olabilir." });
+                if (bytes.Length < 5 || bytes[0] != 0x25 || bytes[1] != 0x50 || bytes[2] != 0x44 || bytes[3] != 0x46)
+                    return BadRequest(new { message = "Geçersiz PDF dosyası." });
+                contentType = "application/pdf";
+            }
+            else
+            {
+                if (!PersonnelAllowedExtensions.Contains(ext))
+                    return BadRequest(new { message = "Personel evrakı için izin verilen türler: PDF, JPG, PNG, WEBP, DOC, DOCX, XLS, XLSX." });
+                if (string.IsNullOrWhiteSpace(contentType))
+                    contentType = GuessContentType(ext);
+
+                var personnelCount = await _context.FieldWorkerDocuments
+                    .IgnoreQueryFilters()
+                    .CountAsync(d => d.FieldWorkerProfileId == profile.Id
+                                     && !d.IsDeleted
+                                     && d.DocumentType == FieldWorkerDocumentTypes.Personnel);
+                if (personnelCount >= MaxPersonnelDocuments)
+                    return BadRequest(new { message = $"Personel Evrak Bilgisi en fazla {MaxPersonnelDocuments} dosya olabilir." });
+            }
+
+            FieldWorkerDocument? existingAuth = null;
+            if (documentType == FieldWorkerDocumentTypes.Authorization)
+            {
+                existingAuth = await _context.FieldWorkerDocuments
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(d => d.FieldWorkerProfileId == profile.Id
+                                              && !d.IsDeleted
+                                              && d.DocumentType == FieldWorkerDocumentTypes.Authorization);
+            }
+
+            if (existingAuth != null)
+            {
+                existingAuth.FileName = fileName;
+                existingAuth.ContentType = contentType;
+                existingAuth.Data = bytes;
+                existingAuth.FileSize = bytes.LongLength;
+                existingAuth.UploadedAt = DateTime.UtcNow;
+                existingAuth.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    message = "Yetki Belgesi güncellendi.",
+                    id = existingAuth.Id,
+                    documentType = existingAuth.DocumentType,
+                    fileName = existingAuth.FileName,
+                    contentType = existingAuth.ContentType,
+                    fileSize = existingAuth.FileSize,
+                    uploadedAt = existingAuth.UploadedAt.ToString("yyyy-MM-dd HH:mm"),
+                });
+            }
+
+            var doc = new FieldWorkerDocument
+            {
+                FieldWorkerProfileId = profile.Id,
+                DocumentType = documentType,
+                FileName = fileName,
+                ContentType = contentType,
+                Data = bytes,
+                FileSize = bytes.LongLength,
+                UploadedAt = DateTime.UtcNow,
+                TenantId = profile.TenantId,
+                CustomerId = profile.CustomerId,
+            };
+            _context.FieldWorkerDocuments.Add(doc);
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = documentType == FieldWorkerDocumentTypes.Authorization
+                    ? "Yetki Belgesi kaydedildi."
+                    : "Personel evrakı kaydedildi.",
+                id = doc.Id,
+                documentType = doc.DocumentType,
+                fileName = doc.FileName,
+                contentType = doc.ContentType,
+                fileSize = doc.FileSize,
+                uploadedAt = doc.UploadedAt.ToString("yyyy-MM-dd HH:mm"),
+            });
+        }
+
+        /// <summary>
+        /// Evrak indir / görüntüle.
+        /// GET /api/teams/{id}/documents/{docId}
+        /// </summary>
+        [HttpGet("{id:guid}/documents/{docId:guid}")]
+        public async Task<IActionResult> GetDocument(Guid id, Guid docId)
+        {
+            if (!await _userAccessService.IsTenantAdminOrAboveAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Evrak görüntülemek için Super Admin veya Firma Admin olmalısınız." });
+
+            var profile = await FindAccessibleProfileAsync(id);
+            if (profile == null)
+                return NotFound(new { message = "Ekip profili bulunamadı veya yetkiniz yetersiz." });
+
+            var doc = await _context.FieldWorkerDocuments
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .FirstOrDefaultAsync(d => d.Id == docId && d.FieldWorkerProfileId == profile.Id && !d.IsDeleted);
+
+            if (doc == null || doc.Data == null || doc.Data.Length == 0)
+                return NotFound(new { message = "Evrak bulunamadı." });
+
+            Response.Headers["Content-Disposition"] = $"inline; filename=\"{doc.FileName}\"";
+            return File(doc.Data, doc.ContentType);
+        }
+
+        /// <summary>
+        /// Evrak sil.
+        /// DELETE /api/teams/{id}/documents/{docId}
+        /// </summary>
+        [HttpDelete("{id:guid}/documents/{docId:guid}")]
+        public async Task<IActionResult> DeleteDocument(Guid id, Guid docId)
+        {
+            if (!await _userAccessService.IsTenantAdminOrAboveAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Evrak silmek için Super Admin veya Firma Admin olmalısınız." });
+
+            var profile = await FindAccessibleProfileAsync(id);
+            if (profile == null)
+                return NotFound(new { message = "Ekip profili bulunamadı veya yetkiniz yetersiz." });
+
+            var doc = await _context.FieldWorkerDocuments
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(d => d.Id == docId && d.FieldWorkerProfileId == profile.Id && !d.IsDeleted);
+
+            if (doc == null)
+                return NotFound(new { message = "Evrak bulunamadı." });
+
+            doc.IsDeleted = true;
+            doc.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = doc.DocumentType == FieldWorkerDocumentTypes.Authorization
+                    ? "Yetki Belgesi silindi."
+                    : "Personel evrakı silindi.",
+                id = doc.Id,
+                documentType = doc.DocumentType,
+            });
+        }
+
+        /// <summary>Geriye uyumluluk: Yetki Belgesi yükle → documents?type=Authorization</summary>
+        [HttpPost("{id:guid}/authorization-document")]
+        [RequestSizeLimit(30L * 1024 * 1024)]
+        [RequestFormLimits(MultipartBodyLengthLimit = 30L * 1024 * 1024)]
+        public Task<IActionResult> UploadAuthorizationDocument(Guid id, IFormFile file)
+            => UploadDocument(id, FieldWorkerDocumentTypes.Authorization, file);
+
+        /// <summary>Geriye uyumluluk: Yetki Belgesi görüntüle</summary>
+        [HttpGet("{id:guid}/authorization-document")]
+        public async Task<IActionResult> GetAuthorizationDocument(Guid id)
+        {
+            if (!await _userAccessService.IsTenantAdminOrAboveAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yetki belgesini görüntülemek için Super Admin veya Firma Admin olmalısınız." });
+
+            var profile = await FindAccessibleProfileAsync(id);
+            if (profile == null)
+                return NotFound(new { message = "Ekip profili bulunamadı veya yetkiniz yetersiz." });
+
+            var doc = await _context.FieldWorkerDocuments
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .FirstOrDefaultAsync(d => d.FieldWorkerProfileId == profile.Id
+                                          && !d.IsDeleted
+                                          && d.DocumentType == FieldWorkerDocumentTypes.Authorization);
+
+            if (doc == null || doc.Data == null || doc.Data.Length == 0)
+                return NotFound(new { message = "Bu ekibe ait yetki belgesi yok." });
+
+            Response.Headers["Content-Disposition"] = $"inline; filename=\"{doc.FileName}\"";
+            return File(doc.Data, doc.ContentType);
+        }
+
+        /// <summary>Geriye uyumluluk: Yetki Belgesi sil</summary>
+        [HttpDelete("{id:guid}/authorization-document")]
+        public async Task<IActionResult> DeleteAuthorizationDocument(Guid id)
+        {
+            if (!await _userAccessService.IsTenantAdminOrAboveAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yetki belgesi silmek için Super Admin veya Firma Admin olmalısınız." });
+
+            var profile = await FindAccessibleProfileAsync(id);
+            if (profile == null)
+                return NotFound(new { message = "Ekip profili bulunamadı veya yetkiniz yetersiz." });
+
+            var doc = await _context.FieldWorkerDocuments
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(d => d.FieldWorkerProfileId == profile.Id
+                                          && !d.IsDeleted
+                                          && d.DocumentType == FieldWorkerDocumentTypes.Authorization);
+
+            if (doc == null)
+                return NotFound(new { message = "Bu ekibe ait yetki belgesi yok." });
+
+            doc.IsDeleted = true;
+            doc.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "Yetki belgesi silindi.", hasAuthorizationDocument = false });
+        }
+
+        private static string? NormalizeDocumentType(string? type)
+        {
+            if (string.IsNullOrWhiteSpace(type)) return null;
+            var t = type.Trim();
+            if (t.Equals(FieldWorkerDocumentTypes.Authorization, StringComparison.OrdinalIgnoreCase)
+                || t.Equals("YetkiBelgesi", StringComparison.OrdinalIgnoreCase)
+                || t.Equals("yetki", StringComparison.OrdinalIgnoreCase))
+                return FieldWorkerDocumentTypes.Authorization;
+            if (t.Equals(FieldWorkerDocumentTypes.Personnel, StringComparison.OrdinalIgnoreCase)
+                || t.Equals("Personel", StringComparison.OrdinalIgnoreCase)
+                || t.Equals("PersonelEvrak", StringComparison.OrdinalIgnoreCase))
+                return FieldWorkerDocumentTypes.Personnel;
+            return null;
+        }
+
+        private static string GuessContentType(string ext) => ext.ToLowerInvariant() switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".webp" => "image/webp",
+            ".doc" => "application/msword",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xls" => "application/vnd.ms-excel",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            _ => "application/octet-stream",
+        };
+
+        private async Task<FieldWorkerProfile?> FindAccessibleProfileAsync(Guid userId)
+        {
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            return await _context.FieldWorkerProfiles
+                .IgnoreQueryFilters()
+                .Include(p => p.User)
+                .FirstOrDefaultAsync(p =>
+                    p.UserId == userId &&
+                    !p.IsDeleted &&
+                    p.User != null &&
+                    !p.User.IsDeleted &&
+                    (isSuperAdmin ||
+                     p.User.TenantId == tenantId ||
+                     (tenantId == _trugoTenantId && p.User.TenantId == _yesilPanoTenantId)));
         }
     }
 

@@ -37,6 +37,14 @@ namespace GA.Core.Domain.Entities
         public string? FieldNote { get; set; }
         public DateTime? FieldNoteAddedAt { get; set; }
 
+        /// <summary>TESLA görünümü için AI çevirileri (EN)</summary>
+        public string? TitleEn { get; set; }
+        public string? DescriptionEn { get; set; }
+        public string? MobileDescriptionEn { get; set; }
+        public string? FieldNoteEn { get; set; }
+        public string? TranslationProvider { get; set; }
+        public DateTime? TranslatedAt { get; set; }
+
         // 🔒 Şirket Ayrıştırma Alanları
         public Guid TenantId { get; set; }
         public Guid? CustomerId { get; set; }

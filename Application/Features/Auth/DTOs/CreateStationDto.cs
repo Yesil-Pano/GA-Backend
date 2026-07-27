@@ -3,7 +3,7 @@
     public class CreateStationDto
     {
         public string Name { get; set; } = string.Empty;
-        public string StatusType { get; set; } = "Alt Yapı Tamamlandı";
+        public string StatusType { get; set; } = "Bakıma Dahil";
         public string PowerType { get; set; } = "AC";
         public string PersonnelName { get; set; } = string.Empty;
         public string PersonnelPhone { get; set; } = string.Empty;

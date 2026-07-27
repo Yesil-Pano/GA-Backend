@@ -47,6 +47,7 @@ namespace GA.Infrastructure.Persistence.Context
         public DbSet<UserRole> UserRoles { get; set; } = null!;
         public DbSet<RolePermission> RolePermissions { get; set; } = null!;
         public DbSet<FieldWorkerProfile> FieldWorkerProfiles { get; set; } = null!;
+        public DbSet<FieldWorkerDocument> FieldWorkerDocuments { get; set; } = null!;
 
         // Menü ve Saha Operasyon Tabloları
         public DbSet<Survey> Surveys { get; set; } = null!;
@@ -125,6 +126,19 @@ namespace GA.Infrastructure.Persistence.Context
                     {
                         j.HasKey("FieldWorkerProfileId", "ProjectId");
                     });
+
+            modelBuilder.Entity<FieldWorkerDocument>(entity =>
+            {
+                entity.ToTable("FieldWorkerDocuments");
+                entity.Property(d => d.DocumentType).HasMaxLength(32).IsRequired();
+                entity.Property(d => d.FileName).HasMaxLength(260).IsRequired();
+                entity.Property(d => d.ContentType).HasMaxLength(120).IsRequired();
+                entity.HasIndex(d => new { d.FieldWorkerProfileId, d.DocumentType });
+                entity.HasOne(d => d.FieldWorkerProfile)
+                    .WithMany(p => p.Documents)
+                    .HasForeignKey(d => d.FieldWorkerProfileId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
 
             // İl / İlçe — kaynak Cities/Districts şeması ile uyumlu (cross-server COPY)
             modelBuilder.Entity<City>(entity =>

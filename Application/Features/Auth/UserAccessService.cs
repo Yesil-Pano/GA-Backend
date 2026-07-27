@@ -74,6 +74,15 @@ namespace GA.Application.Features.Auth
             return roles.Any(r => string.Equals(r, RoleNames.SuperAdmin, StringComparison.OrdinalIgnoreCase));
         }
 
+        public async Task<bool> IsTenantAdminOrAboveAsync(CancellationToken ct = default)
+        {
+            if (await IsSuperAdminAsync(ct)) return true;
+            if (_currentUser.UserId == Guid.Empty) return false;
+
+            var roles = await GetRoleNamesAsync(_currentUser.UserId, ct);
+            return roles.Any(r => string.Equals(r, RoleNames.TenantAdmin, StringComparison.OrdinalIgnoreCase));
+        }
+
         public async Task<IReadOnlyList<string>> GetRoleNamesAsync(Guid userId, CancellationToken ct = default)
         {
             return await _context.UserRoles

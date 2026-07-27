@@ -10,6 +10,9 @@ namespace GA.Application.Features.Auth
 
         Task<bool> IsSuperAdminAsync(CancellationToken ct = default);
 
+        /// <summary>SuperAdmin veya TenantAdmin (firma admin).</summary>
+        Task<bool> IsTenantAdminOrAboveAsync(CancellationToken ct = default);
+
         Task<IReadOnlyList<string>> GetRoleNamesAsync(Guid userId, CancellationToken ct = default);
     }
 }

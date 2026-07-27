@@ -1,14 +1,20 @@
 ﻿using GA.Core.Domain.Common;
+using System;
 
 namespace GA.Core.Domain.Entities
 {
     public class Tenant : BaseEntity
     {
-        public required string Name { get; set; } // Firma Adı (Örn: Trugo)
-        public string? TaxNumber { get; set; }     // Vergi Numarası
+        public required string Name { get; set; }
+        public string? TaxNumber { get; set; }
         public bool IsActive { get; set; } = true;
 
-        // Bir ana firmanın birden fazla alt müşterisi olabilir
+        /// <summary>Demo firma — süre dolunca web/mobil erişim kapanır.</summary>
+        public bool IsDemo { get; set; }
+
+        /// <summary>Demo bitiş (UTC). IsDemo=false iken null.</summary>
+        public DateTime? DemoExpiresAt { get; set; }
+
         public virtual ICollection<Customer> Customers { get; set; } = new List<Customer>();
         public virtual ICollection<User> Users { get; set; } = new List<User>();
     }

@@ -3,6 +3,7 @@ using System;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NetTopologySuite.Geometries;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace GA.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260727091937_SyncModelResidual")]
+    partial class SyncModelResidual
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -344,6 +347,21 @@ namespace GA.Migrations
                     b.Property<string>("Address")
                         .HasColumnType("text");
 
+                    b.Property<string>("AuthorizationDocumentContentType")
+                        .HasColumnType("text");
+
+                    b.Property<byte[]>("AuthorizationDocumentData")
+                        .HasColumnType("bytea");
+
+                    b.Property<string>("AuthorizationDocumentFileName")
+                        .HasColumnType("text");
+
+                    b.Property<long?>("AuthorizationDocumentFileSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime?>("AuthorizationDocumentUploadedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("City")
                         .HasColumnType("text");
 
@@ -386,62 +404,6 @@ namespace GA.Migrations
                         .IsUnique();
 
                     b.ToTable("FieldWorkerProfiles");
-                });
-
-            modelBuilder.Entity("GA.Core.Domain.Entities.FieldWorkerDocument", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ContentType")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("CustomerId")
-                        .HasColumnType("uuid");
-
-                    b.Property<byte[]>("Data")
-                        .IsRequired()
-                        .HasColumnType("bytea");
-
-                    b.Property<string>("DocumentType")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<Guid>("FieldWorkerProfileId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasMaxLength(260)
-                        .HasColumnType("character varying(260)");
-
-                    b.Property<long>("FileSize")
-                        .HasColumnType("bigint");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("UploadedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("FieldWorkerProfileId", "DocumentType");
-
-                    b.ToTable("FieldWorkerDocuments", (string)null);
                 });
 
             modelBuilder.Entity("GA.Core.Domain.Entities.Permission", b =>
@@ -860,16 +822,10 @@ namespace GA.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<DateTime?>("DemoExpiresAt")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
                     b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("IsDemo")
                         .HasColumnType("boolean");
 
                     b.Property<string>("Name")
@@ -1117,9 +1073,6 @@ namespace GA.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("DescriptionEn")
-                        .HasColumnType("text");
-
                     b.Property<Guid?>("DistrictId")
                         .HasColumnType("uuid");
 
@@ -1131,9 +1084,6 @@ namespace GA.Migrations
 
                     b.Property<DateTime?>("FieldNoteAddedAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("FieldNoteEn")
-                        .HasColumnType("text");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
@@ -1147,9 +1097,6 @@ namespace GA.Migrations
 
                     b.Property<string>("MobileDescription")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("MobileDescriptionEn")
                         .HasColumnType("text");
 
                     b.Property<DateTime?>("NextExecutionDate")
@@ -1184,15 +1131,6 @@ namespace GA.Migrations
 
                     b.Property<string>("Title")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("TitleEn")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("TranslatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("TranslationProvider")
                         .HasColumnType("text");
 
                     b.Property<DateTime?>("UpdatedAt")
@@ -1281,17 +1219,6 @@ namespace GA.Migrations
                     b.Navigation("City");
                 });
 
-            modelBuilder.Entity("GA.Core.Domain.Entities.FieldWorkerDocument", b =>
-                {
-                    b.HasOne("GA.Core.Domain.Entities.FieldWorkerProfile", "FieldWorkerProfile")
-                        .WithMany("Documents")
-                        .HasForeignKey("FieldWorkerProfileId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("FieldWorkerProfile");
-                });
-
             modelBuilder.Entity("GA.Core.Domain.Entities.FieldWorkerProfile", b =>
                 {
                     b.HasOne("GA.Core.Domain.Entities.User", "User")
@@ -1299,8 +1226,6 @@ namespace GA.Migrations
                         .HasForeignKey("GA.Core.Domain.Entities.FieldWorkerProfile", "UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.Navigation("Documents");
 
                     b.Navigation("User");
                 });

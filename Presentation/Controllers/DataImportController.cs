@@ -187,7 +187,12 @@ namespace GA.Presentation.Controllers
                     string devicePower = columns.Length > 6 ? columns[6].Replace("\0", "").Trim() : null;
                     string city = columns.Length > 7 ? columns[7].Replace("\0", "").Trim() : "Bilinmiyor";
                     string district = columns.Length > 8 ? columns[8].Replace("\0", "").Trim() : null;
-                    string statusType = columns.Length > 9 ? columns[9].Replace("\0", "").Trim() : "Alt Yapı Tamamlandı";
+                    string statusType = columns.Length > 9 ? columns[9].Replace("\0", "").Trim() : "Bakıma Dahil";
+                    if (!string.Equals(statusType, "Bakıma Dahil", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(statusType, "Bakım Dışı", StringComparison.OrdinalIgnoreCase))
+                    {
+                        statusType = "Bakıma Dahil";
+                    }
                     string partnerStatus = columns.Length > 11 ? columns[11].Replace("\0", "").Trim() : null;
                     string ownerCompany = columns.Length > 12 ? columns[12].Replace("\0", "").Trim() : null;
 

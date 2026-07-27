@@ -7,7 +7,7 @@ namespace GA.Core.Domain.Entities
     public class Station : BaseEntity, IMultiTenant
     {
         public string Name { get; set; } = string.Empty;
-        public string StatusType { get; set; } = "Alt Yapı Tamamlandı";
+        public string StatusType { get; set; } = "Bakıma Dahil";
         public string PowerType { get; set; } = "DC";
         public string City { get; set; } = "Ankara";
 
