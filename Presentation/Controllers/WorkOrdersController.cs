@@ -356,6 +356,11 @@ namespace GA.Presentation.Controllers
             if (resolvedStation != null)
                 targetTenantId = resolvedStation.TenantId;
 
+            // Atama yalnızca Super Admin — tenant kullanıcıları atamasız açar
+            Guid? assignedToUserId = null;
+            if (isSuperAdmin && dto.AssignedToUserId.HasValue && dto.AssignedToUserId.Value != Guid.Empty)
+                assignedToUserId = dto.AssignedToUserId;
+
             var workOrder = new WorkOrder
             {
                 Title = dto.Title,
@@ -370,7 +375,7 @@ namespace GA.Presentation.Controllers
                 EndDate = DateTime.SpecifyKind(dto.EndDate, DateTimeKind.Utc),
                 OperationUserId = dto.OperationUserId,
                 OpenedByUserId = dto.OpenedByUserId ?? userId,
-                AssignedToUserId = dto.AssignedToUserId,
+                AssignedToUserId = assignedToUserId,
                 IsPeriodic = dto.IsPeriodic,
                 RecurrenceInterval = dto.RecurrenceInterval ?? "None",
                 NextExecutionDate = dto.IsPeriodic
@@ -430,7 +435,8 @@ namespace GA.Presentation.Controllers
         }
 
         /// <summary>
-        /// Seçili noktalara aynı form alanlarıyla toplu iş emri açar. Sahacı zorunlu.
+        /// Seçili noktalara aynı form alanlarıyla toplu iş emri açar.
+        /// Sahacı ataması yalnızca Super Admin içindir; tenant atamasız açar.
         /// POST /api/workorders/bulk
         /// </summary>
         [HttpPost("bulk")]
@@ -439,20 +445,21 @@ namespace GA.Presentation.Controllers
             if (dto.StationIds == null || dto.StationIds.Count == 0)
                 return BadRequest(new { message = "En az bir nokta seçilmelidir." });
 
-            if (!dto.AssignedToUserId.HasValue || dto.AssignedToUserId == Guid.Empty)
-                return BadRequest(new { message = "Sahacı ataması zorunludur." });
-
             var userId = _currentUserService.UserId;
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
 
-            var assignee = await _context.Users
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(u => u.Id == dto.AssignedToUserId.Value
-                                          && !u.IsDeleted && u.IsActive
-                                          && u.FieldWorkerProfile != null);
-            if (assignee == null)
-                return BadRequest(new { message = "Seçilen saha personeli bulunamadı." });
+            User? assignee = null;
+            if (isSuperAdmin && dto.AssignedToUserId.HasValue && dto.AssignedToUserId != Guid.Empty)
+            {
+                assignee = await _context.Users
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(u => u.Id == dto.AssignedToUserId.Value
+                                              && !u.IsDeleted && u.IsActive
+                                              && u.FieldWorkerProfile != null);
+                if (assignee == null)
+                    return BadRequest(new { message = "Seçilen saha personeli bulunamadı." });
+            }
 
             var stations = await _context.Stations
                 .IgnoreQueryFilters()
@@ -492,7 +499,7 @@ namespace GA.Presentation.Controllers
                         : new NetTopologySuite.Geometries.Point(0, 0) { SRID = 4326 },
                     OperationUserId = dto.OperationUserId,
                     OpenedByUserId = dto.OpenedByUserId ?? userId,
-                    AssignedToUserId = assignee.Id,
+                    AssignedToUserId = assignee?.Id,
                     IsPeriodic = dto.IsPeriodic,
                     RecurrenceInterval = dto.IsPeriodic
                         ? (string.IsNullOrWhiteSpace(dto.RecurrenceInterval) ? "Aylik" : dto.RecurrenceInterval)
@@ -515,17 +522,17 @@ namespace GA.Presentation.Controllers
             foreach (var id in createdIds)
             {
                 var wo = await _context.WorkOrders.IgnoreQueryFilters().FirstAsync(w => w.Id == id);
-                await _notificationService.NotifyAsync(
-                    "WorkOrderAssigned",
-                    "Size iş emri atandı",
-                    $"{wo.CustomerName}: {wo.Title}",
-                    wo.TenantId,
-                    wo.Id,
-                    userId == Guid.Empty ? null : userId,
-                    wo.AssignedToUserId);
-
                 if (wo.AssignedToUserId.HasValue && wo.AssignedToUserId != Guid.Empty)
                 {
+                    await _notificationService.NotifyAsync(
+                        "WorkOrderAssigned",
+                        "Size iş emri atandı",
+                        $"{wo.CustomerName}: {wo.Title}",
+                        wo.TenantId,
+                        wo.Id,
+                        userId == Guid.Empty ? null : userId,
+                        wo.AssignedToUserId);
+
                     await _pushNotificationService.SendToUserAsync(
                         wo.AssignedToUserId.Value,
                         "Size iş emri atandı",
@@ -535,6 +542,16 @@ namespace GA.Presentation.Controllers
                             ["type"] = "WorkOrderAssigned",
                             ["workOrderId"] = wo.Id.ToString(),
                         });
+                }
+                else
+                {
+                    await _notificationService.NotifyAsync(
+                        "WorkOrderCreated",
+                        "Yeni iş emri",
+                        $"{wo.CustomerName}: {wo.Title}",
+                        wo.TenantId,
+                        wo.Id,
+                        userId == Guid.Empty ? null : userId);
                 }
             }
 
@@ -548,21 +565,20 @@ namespace GA.Presentation.Controllers
 
         /// <summary>
         /// Atanmamış / yanlış atanmış iş emrine saha personeli atar veya atamayı kaldırır.
-        /// PUT /api/workorders/{id}/assign
+        /// Yalnızca Super Admin. PUT|POST /api/workorders/{id}/assign
         /// </summary>
         [HttpPut("{id}/assign")]
+        [HttpPost("{id}/assign")]
         public async Task<IActionResult> AssignWorkOrder(Guid id, [FromBody] AssignWorkOrderDto dto)
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
+            if (!isSuperAdmin)
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "İş emri ataması yalnızca Super Admin tarafından yapılabilir." });
 
             var workOrder = await _context.WorkOrders
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted &&
-                                          (isSuperAdmin ||
-                                           w.TenantId == tenantId ||
-                                           (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
-                                           (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
+                .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted);
 
             if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
 
@@ -706,6 +722,79 @@ namespace GA.Presentation.Controllers
             workOrder.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
             return Ok(new { message = "İş emri silindi." });
+        }
+
+        /// <summary>
+        /// Seçili iş emirlerine aynı saha personelini atar. Yalnızca Super Admin.
+        /// POST /api/workorders/bulk-assign
+        /// </summary>
+        [HttpPost("bulk-assign")]
+        public async Task<IActionResult> BulkAssign([FromBody] BulkAssignWorkOrderDto dto)
+        {
+            var tenantId = _currentUserService.TenantId;
+            if (tenantId != Guid.Empty)
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "İş emri ataması yalnızca Super Admin tarafından yapılabilir." });
+
+            if (dto.Ids == null || dto.Ids.Count == 0)
+                return BadRequest(new { message = "En az bir iş emri seçilmelidir." });
+
+            if (dto.AssignedToUserId == Guid.Empty)
+                return BadRequest(new { message = "Saha personeli seçilmelidir." });
+
+            var assignee = await _context.Users
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(u => u.Id == dto.AssignedToUserId
+                                          && !u.IsDeleted
+                                          && u.IsActive
+                                          && u.FieldWorkerProfile != null);
+
+            if (assignee == null)
+                return BadRequest(new { message = "Seçilen saha personeli bulunamadı veya aktif değil." });
+
+            var actorId = _currentUserService.UserId == Guid.Empty ? (Guid?)null : _currentUserService.UserId;
+            var updated = 0;
+
+            foreach (var id in dto.Ids.Distinct())
+            {
+                var workOrder = await _context.WorkOrders
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted);
+                if (workOrder == null) continue;
+
+                workOrder.AssignedToUserId = assignee.Id;
+                workOrder.OperationUserId = assignee.Id;
+                workOrder.OpenedByUserId = assignee.Id;
+                workOrder.UpdatedAt = DateTime.UtcNow;
+                updated++;
+
+                await _notificationService.NotifyAsync(
+                    "WorkOrderAssigned",
+                    "Size iş emri atandı",
+                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    workOrder.TenantId,
+                    workOrder.Id,
+                    actorId,
+                    assignee.Id);
+
+                await _pushNotificationService.SendToUserAsync(
+                    assignee.Id,
+                    "Size iş emri atandı",
+                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    new Dictionary<string, object>
+                    {
+                        ["type"] = "WorkOrderAssigned",
+                        ["workOrderId"] = workOrder.Id.ToString(),
+                    });
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new
+            {
+                message = $"{updated} iş emri {assignee.FullName} kişisine atandı.",
+                count = updated,
+                assignedToUserId = assignee.Id,
+                assignedToUserName = assignee.FullName,
+            });
         }
 
         /// <summary>Toplu soft-delete. POST /api/workorders/bulk-delete</summary>
@@ -885,7 +974,9 @@ namespace GA.Presentation.Controllers
             workOrder.Location = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 };
             workOrder.OperationUserId = dto.OperationUserId;
             workOrder.OpenedByUserId = dto.OpenedByUserId;
-            workOrder.AssignedToUserId = dto.AssignedToUserId;
+            // Atama değişikliği yalnızca Super Admin
+            if (isSuperAdmin)
+                workOrder.AssignedToUserId = dto.AssignedToUserId;
             workOrder.IsPeriodic = dto.IsPeriodic;
             workOrder.RecurrenceInterval = dto.IsPeriodic
                 ? (string.IsNullOrWhiteSpace(dto.RecurrenceInterval) ? "Aylik" : dto.RecurrenceInterval)
@@ -1009,6 +1100,12 @@ namespace GA.Presentation.Controllers
     public class AssignWorkOrderDto
     {
         public Guid? AssignedToUserId { get; set; }
+    }
+
+    public class BulkAssignWorkOrderDto
+    {
+        public List<Guid> Ids { get; set; } = new();
+        public Guid AssignedToUserId { get; set; }
     }
 
     public class UpdateWorkOrderStatusDto
