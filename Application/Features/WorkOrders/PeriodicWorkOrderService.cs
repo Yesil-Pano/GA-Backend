@@ -1,4 +1,5 @@
 using GA.Application.Features.Notifications;
+using GA.Core.Domain.Constants;
 using GA.Core.Domain.Entities;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
@@ -33,17 +34,20 @@ namespace GA.Application.Features.WorkOrders
         private readonly ApplicationDbContext _context;
         private readonly PeriodicWorkOrdersOptions _options;
         private readonly INotificationService _notificationService;
+        private readonly IPushNotificationService _pushNotificationService;
         private readonly ILogger<PeriodicWorkOrderService> _logger;
 
         public PeriodicWorkOrderService(
             ApplicationDbContext context,
             IOptions<PeriodicWorkOrdersOptions> options,
             INotificationService notificationService,
+            IPushNotificationService pushNotificationService,
             ILogger<PeriodicWorkOrderService> logger)
         {
             _context = context;
             _options = options.Value;
             _notificationService = notificationService;
+            _pushNotificationService = pushNotificationService;
             _logger = logger;
         }
 
@@ -118,6 +122,20 @@ namespace GA.Application.Features.WorkOrders
                         null,
                         wo.AssignedToUserId,
                         cancellationToken);
+
+                    if (wo.AssignedToUserId.HasValue && wo.AssignedToUserId != Guid.Empty)
+                    {
+                        await _pushNotificationService.SendToUserAsync(
+                            wo.AssignedToUserId.Value,
+                            "Periyodik iş emri atandı",
+                            $"{wo.CustomerName}: {wo.Title}",
+                            new Dictionary<string, object>
+                            {
+                                ["type"] = "WorkOrderAssigned",
+                                ["workOrderId"] = wo.Id.ToString(),
+                            },
+                            cancellationToken);
+                    }
                 }
             }
 
@@ -158,7 +176,9 @@ namespace GA.Application.Features.WorkOrders
                 IsPeriodic = false,
                 RecurrenceInterval = "None",
                 NextExecutionDate = null,
-                Status = "Bekliyor",
+                Status = "Devam Ediyor",
+                ParentWorkOrderId = template.Id,
+                PeriodLabel = start.ToString("yyyy-MM"),
             };
         }
     }

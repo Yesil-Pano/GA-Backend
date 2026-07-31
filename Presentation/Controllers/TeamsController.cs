@@ -144,21 +144,31 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpGet("lookups")]
-        public async Task<IActionResult> GetTeamsLookups([FromQuery] string? partnerKey)
+        public async Task<IActionResult> GetTeamsLookups(
+            [FromQuery] string? partnerKey,
+            [FromQuery] Guid? tenantIdFilter)
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
 
-            var projects = await _context.Projects
+            var projectsQuery = _context.Projects
                 .IgnoreQueryFilters()
                 .Where(p => !p.IsDeleted &&
                             (isSuperAdmin ||
                              p.TenantId == tenantId ||
-                             (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId)))
+                             (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId)));
+
+            if (isSuperAdmin && tenantIdFilter.HasValue && tenantIdFilter.Value != Guid.Empty)
+            {
+                projectsQuery = projectsQuery.Where(p => p.TenantId == tenantIdFilter.Value);
+            }
+
+            var projects = await projectsQuery
                 .Select(p => new { id = p.Id, name = p.Name, tenantId = p.TenantId })
+                .OrderBy(p => p.name)
                 .ToListAsync();
 
-            if (isSuperAdmin)
+            if (isSuperAdmin && (!tenantIdFilter.HasValue || tenantIdFilter.Value == Guid.Empty))
             {
                 var partner = PartnerCatalog.ResolveFilter(partnerKey);
                 if (partner != null)
@@ -231,13 +241,18 @@ namespace GA.Presentation.Controllers
             {
                 var selectedProjects = await _context.Projects
                     .IgnoreQueryFilters()
-                    .Where(p => dto.ProjectIds.Contains(p.Id))
+                    .Where(p => !p.IsDeleted
+                                && p.TenantId == targetTenantId
+                                && dto.ProjectIds.Contains(p.Id))
                     .ToListAsync();
 
+                if (selectedProjects.Count != dto.ProjectIds.Distinct().Count())
+                    return BadRequest(new { Message = "Seçilen projelerden biri veya birkaçı hedef firmaya ait değil veya bulunamadı." });
+
                 foreach (var project in selectedProjects)
-                {
                     profile.Projects.Add(project);
-                }
+
+                profile.ProjectName = string.Join(", ", selectedProjects.Select(p => p.Name));
             }
 
             _context.FieldWorkerProfiles.Add(profile);
@@ -296,13 +311,22 @@ namespace GA.Presentation.Controllers
                 {
                     var selectedProjects = await _context.Projects
                         .IgnoreQueryFilters()
-                        .Where(p => dto.ProjectIds.Contains(p.Id))
+                        .Where(p => !p.IsDeleted
+                                    && p.TenantId == user.TenantId
+                                    && dto.ProjectIds.Contains(p.Id))
                         .ToListAsync();
 
+                    if (selectedProjects.Count != dto.ProjectIds.Distinct().Count())
+                        return BadRequest(new { Message = "Seçilen projelerden biri veya birkaçı bu personele ait firmada bulunamadı." });
+
                     foreach (var project in selectedProjects)
-                    {
                         user.FieldWorkerProfile.Projects.Add(project);
-                    }
+
+                    user.FieldWorkerProfile.ProjectName = string.Join(", ", selectedProjects.Select(p => p.Name));
+                }
+                else
+                {
+                    user.FieldWorkerProfile.ProjectName = "-";
                 }
             }
 
@@ -341,7 +365,7 @@ namespace GA.Presentation.Controllers
                 user.FieldWorkerProfile.UpdatedAt = DateTime.UtcNow;
             }
 
-            var openStatuses = new[] { "Bekliyor", "Devam Ediyor" };
+            var openStatuses = new[] { "Devam Ediyor" };
             var openOrders = await _context.WorkOrders
                 .IgnoreQueryFilters()
                 .Where(w => !w.IsDeleted

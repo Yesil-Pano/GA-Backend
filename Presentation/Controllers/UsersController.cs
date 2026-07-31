@@ -1,4 +1,5 @@
 ﻿using GA.Core.Domain.Constants;
+using GA.Application.Features.Auth;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
@@ -20,17 +21,20 @@ namespace GA.Presentation.Controllers
         private readonly IGenericRepository<Tenant> _tenantRepository;
         private readonly ICurrentUserService _currentUserService;
         private readonly ApplicationDbContext _context;
+        private readonly IUserAccessService _userAccessService;
 
         public UsersController(
             IGenericRepository<User> userRepository,
             IGenericRepository<Tenant> tenantRepository,
             ICurrentUserService currentUserService,
-            ApplicationDbContext context)
+            ApplicationDbContext context,
+            IUserAccessService userAccessService)
         {
             _userRepository = userRepository;
             _tenantRepository = tenantRepository;
             _currentUserService = currentUserService;
             _context = context;
+            _userAccessService = userAccessService;
         }
 
         [HttpGet("me")]
@@ -80,6 +84,7 @@ namespace GA.Presentation.Controllers
                 }
 
                 var companyName = tenant != null ? tenant.Name : "Bilinmeyen Şirket";
+                var roles = await _userAccessService.GetRoleNamesAsync(userId);
 
                 return Ok(new
                 {
@@ -87,6 +92,9 @@ namespace GA.Presentation.Controllers
                     email = user.Email,
                     companyName,
                     tenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+                    roles,
+                    canViewIsgPhotos = await _userAccessService.CanViewIsgPhotosAsync(),
+                    canViewOperationPhotos = await _userAccessService.CanViewOperationPhotosAsync(),
                     hasAuthorizationDocument = hasAuthDoc,
                     authorizationDocumentFileName = authFileName,
                     authorizationDocumentFileSize = authFileSize,
@@ -131,5 +139,96 @@ namespace GA.Presentation.Controllers
             Response.Headers["Content-Disposition"] = $"inline; filename=\"{fileName}\"";
             return File(doc.Data, doc.ContentType ?? "application/pdf");
         }
+
+        /// <summary>Super Admin: ofis kullanıcıları listesi. GET /api/users</summary>
+        [HttpGet]
+        public async Task<IActionResult> ListUsers()
+        {
+            if (!await _userAccessService.IsSuperAdminAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin erişebilir." });
+
+            var users = await _context.Users
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(u => !u.IsDeleted)
+                .OrderBy(u => u.FullName)
+                .Select(u => new
+                {
+                    id = u.Id,
+                    fullName = u.FullName,
+                    email = u.Email,
+                    tenantId = u.TenantId,
+                    isActive = u.IsActive,
+                    roles = _context.UserRoles
+                        .Where(ur => ur.UserId == u.Id)
+                        .Join(_context.Roles.Where(r => !r.IsDeleted), ur => ur.RoleId, r => r.Id, (_, r) => r.Name)
+                        .ToList(),
+                })
+                .ToListAsync();
+
+            return Ok(users);
+        }
+
+        /// <summary>Super Admin: kullanıcı rollerini güncelle. PUT /api/users/{id}/roles</summary>
+        [HttpPut("{id:guid}/roles")]
+        public async Task<IActionResult> UpdateUserRoles(Guid id, [FromBody] UpdateUserRolesDto dto)
+        {
+            if (!await _userAccessService.IsSuperAdminAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin erişebilir." });
+
+            var user = await _context.Users
+                .IgnoreQueryFilters()
+                .Include(u => u.UserRoles)
+                .FirstOrDefaultAsync(u => u.Id == id && !u.IsDeleted);
+
+            if (user == null)
+                return NotFound(new { message = "Kullanıcı bulunamadı." });
+
+            var requested = (dto.RoleNames ?? new List<string>())
+                .Where(r => !string.IsNullOrWhiteSpace(r))
+                .Select(r => r.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var validRoles = await _context.Roles
+                .IgnoreQueryFilters()
+                .Where(r => !r.IsDeleted && requested.Contains(r.Name))
+                .ToListAsync();
+
+            if (validRoles.Count != requested.Count)
+                return BadRequest(new { message = "Geçersiz rol adı içeriyor." });
+
+            _context.UserRoles.RemoveRange(user.UserRoles);
+            foreach (var role in validRoles)
+            {
+                _context.UserRoles.Add(new UserRole { UserId = user.Id, RoleId = role.Id });
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "Roller güncellendi.", roles = validRoles.Select(r => r.Name).ToList() });
+        }
+
+        /// <summary>Super Admin: atanabilir roller. GET /api/users/roles</summary>
+        [HttpGet("roles")]
+        public async Task<IActionResult> ListRoles()
+        {
+            if (!await _userAccessService.IsSuperAdminAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin erişebilir." });
+
+            var roles = await _context.Roles
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(r => !r.IsDeleted)
+                .OrderBy(r => r.Name)
+                .Select(r => new { id = r.Id, name = r.Name, description = r.Description })
+                .ToListAsync();
+
+            return Ok(roles);
+        }
+    }
+
+    public class UpdateUserRolesDto
+    {
+        public List<string> RoleNames { get; set; } = new();
     }
 }

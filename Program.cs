@@ -3,6 +3,7 @@ using GA.Application.Features.Chat;
 using GA.Application.Features.Location;
 using GA.Application.Features.Notifications;
 using GA.Application.Features.Translation;
+using GA.Application.Features.OfficeChat;
 using GA.Application.Features.WorkOrders;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Background;
@@ -16,6 +17,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -53,6 +55,7 @@ builder.Services.AddHttpClient("expo-push", client =>
     client.Timeout = TimeSpan.FromSeconds(20);
 });
 builder.Services.AddScoped<IChatService, ChatService>();
+builder.Services.AddScoped<IOfficeChatService, OfficeChatService>();
 
 builder.Services.Configure<TranslationOptions>(
     builder.Configuration.GetSection(TranslationOptions.SectionName));
@@ -112,7 +115,23 @@ builder.Services.AddAuthentication(options =>
 });
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = SecuritySchemeType.Http,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Login yanıtındaki token'ı yapıştırın. 'Bearer ' öneki yazmayın.",
+    });
+
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
+    {
+        [new OpenApiSecuritySchemeReference("Bearer", document)] = [],
+    });
+});
 
 builder.Services.AddControllers();
 

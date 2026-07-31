@@ -46,6 +46,28 @@ namespace GA.Application.Features.Auth
             return !hasFieldProfile;
         }
 
+        public async Task<bool> CanAccessOfficeDirectChatAsync(CancellationToken ct = default)
+        {
+            if (_currentUser.UserId == Guid.Empty) return false;
+
+            var user = await _context.Users
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Include(u => u.UserRoles)
+                    .ThenInclude(ur => ur.Role)
+                .FirstOrDefaultAsync(u => u.Id == _currentUser.UserId && !u.IsDeleted, ct);
+
+            if (user == null) return false;
+            if (IsSuperAdminEmail(user.Email)) return true;
+
+            var roles = user.UserRoles
+                .Where(ur => ur.Role != null && !ur.Role.IsDeleted)
+                .Select(ur => ur.Role.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            return roles.Any(r => RoleNames.OfficeDirectChatRoles.Contains(r));
+        }
+
         public async Task<bool> IsFieldWorkerOnlyForChatAsync(CancellationToken ct = default)
         {
             if (_currentUser.UserId == Guid.Empty) return false;
@@ -96,6 +118,38 @@ namespace GA.Application.Features.Auth
                     (_, r) => r.Name)
                 .Distinct()
                 .ToListAsync(ct);
+        }
+
+        public async Task<bool> IsOperationReporterOnlyAsync(CancellationToken ct = default)
+        {
+            var roles = await GetRoleNamesAsync(_currentUser.UserId, ct);
+            return roles.Any(r => string.Equals(r, RoleNames.OperationReporter, StringComparison.OrdinalIgnoreCase))
+                   && !roles.Any(r =>
+                       string.Equals(r, RoleNames.SuperAdmin, StringComparison.OrdinalIgnoreCase)
+                       || string.Equals(r, RoleNames.TenantAdmin, StringComparison.OrdinalIgnoreCase)
+                       || string.Equals(r, RoleNames.OfficeUser, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public async Task<bool> IsIsgInspectorAsync(CancellationToken ct = default)
+        {
+            if (await IsSuperAdminAsync(ct)) return false;
+            var roles = await GetRoleNamesAsync(_currentUser.UserId, ct);
+            return roles.Any(r => string.Equals(r, RoleNames.IsgInspector, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public async Task<bool> CanViewIsgPhotosAsync(CancellationToken ct = default)
+        {
+            if (await IsSuperAdminAsync(ct)) return true;
+            if (await IsIsgInspectorAsync(ct)) return true;
+            if (await IsTenantAdminOrAboveAsync(ct)) return false;
+            return true;
+        }
+
+        public async Task<bool> CanViewOperationPhotosAsync(CancellationToken ct = default)
+        {
+            if (await IsSuperAdminAsync(ct)) return true;
+            if (await IsIsgInspectorAsync(ct)) return false;
+            return true;
         }
 
         private static bool IsSuperAdminEmail(string? email) =>

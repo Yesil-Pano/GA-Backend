@@ -67,6 +67,11 @@ namespace GA.Infrastructure.Persistence.Context
         public DbSet<ChatMessage> ChatMessages { get; set; } = null!;
         public DbSet<ChatReadState> ChatReadStates { get; set; } = null!;
 
+        // Ofis ↔ ofis doğrudan mesajlaşma
+        public DbSet<OfficeDirectConversation> OfficeDirectConversations { get; set; } = null!;
+        public DbSet<OfficeDirectMessage> OfficeDirectMessages { get; set; } = null!;
+        public DbSet<OfficeDirectReadState> OfficeDirectReadStates { get; set; } = null!;
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -230,6 +235,36 @@ namespace GA.Infrastructure.Persistence.Context
                 entity.HasIndex(r => new { r.ConversationId, r.UserId })
                     .IsUnique()
                     .HasDatabaseName("IX_ChatReadStates_Conversation_User");
+            });
+
+            modelBuilder.Entity<OfficeDirectConversation>(entity =>
+            {
+                entity.HasIndex(c => new { c.TenantId, c.UserOneId, c.UserTwoId })
+                    .IsUnique()
+                    .HasDatabaseName("IX_OfficeDirectConversations_Tenant_UserPair");
+                entity.HasMany(c => c.Messages)
+                    .WithOne(m => m.Conversation)
+                    .HasForeignKey(m => m.OfficeDirectConversationId)
+                    .OnDelete(DeleteBehavior.Cascade);
+                entity.HasMany(c => c.ReadStates)
+                    .WithOne(r => r.Conversation)
+                    .HasForeignKey(r => r.OfficeDirectConversationId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<OfficeDirectMessage>(entity =>
+            {
+                entity.Property(m => m.Body).HasMaxLength(2000).IsRequired();
+                entity.Property(m => m.ClientMessageId).HasMaxLength(100);
+                entity.HasIndex(m => m.OfficeDirectConversationId);
+                entity.HasIndex(m => new { m.OfficeDirectConversationId, m.SenderUserId, m.ClientMessageId });
+            });
+
+            modelBuilder.Entity<OfficeDirectReadState>(entity =>
+            {
+                entity.HasIndex(r => new { r.OfficeDirectConversationId, r.UserId })
+                    .IsUnique()
+                    .HasDatabaseName("IX_OfficeDirectReadStates_Conversation_User");
             });
         }
 

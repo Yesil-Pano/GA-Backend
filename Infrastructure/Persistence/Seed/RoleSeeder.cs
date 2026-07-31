@@ -48,6 +48,20 @@ namespace GA.Infrastructure.Persistence.Seed
                     Description = "Saha personeli — mobil sohbet",
                     CreatedAt = SeedTime,
                 },
+                new Role
+                {
+                    Id = RoleNames.OperationReporterRoleId,
+                    Name = RoleNames.OperationReporter,
+                    Description = "Operasyoncu — arıza açar, ekibe atayamaz",
+                    CreatedAt = SeedTime,
+                },
+                new Role
+                {
+                    Id = RoleNames.IsgInspectorRoleId,
+                    Name = RoleNames.IsgInspector,
+                    Description = "ISG denetçisi — yalnızca ISG fotoğrafları",
+                    CreatedAt = SeedTime,
+                },
             };
 
             foreach (var role in roles)

@@ -11,7 +11,7 @@ namespace GA.Core.Domain.Entities
         public string MobileDescription { get; set; } = string.Empty;
         public string Address { get; set; } = string.Empty;
         public string Priority { get; set; } = "Orta";
-        public string Status { get; set; } = "Bekliyor";
+        public string Status { get; set; } = "Devam Ediyor";
         public string WorkType { get; set; } = "Arıza";
         public string WorkCategory { get; set; } = "Arıza Bildirimi";
 
@@ -27,6 +27,12 @@ namespace GA.Core.Domain.Entities
         public bool IsPeriodic { get; set; } = false;
         public string RecurrenceInterval { get; set; } = "None";
         public DateTime? NextExecutionDate { get; set; }
+
+        /// <summary>Periyodik şablondan üretilen klon — şablon WorkOrder Id</summary>
+        public Guid? ParentWorkOrderId { get; set; }
+
+        /// <summary>Dönem etiketi (ör. 2026-03, 2026-W12)</summary>
+        public string? PeriodLabel { get; set; }
 
         // Durum geçiş zaman damgaları (saniye hassasiyetinde UTC)
         public DateTime? StartedAt { get; set; }

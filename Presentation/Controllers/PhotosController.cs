@@ -1,3 +1,4 @@
+using GA.Application.Features.Auth;
 using GA.Application.Features.Photos.DTOs;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
@@ -15,6 +16,7 @@ namespace GA.Presentation.Controllers
     {
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
+        private readonly IUserAccessService _userAccessService;
 
         private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
         private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
@@ -22,10 +24,14 @@ namespace GA.Presentation.Controllers
         // Maksimum fotoğraf boyutu: 10 MB
         private const long MaxFileSizeBytes = 10 * 1024 * 1024;
 
-        public PhotosController(ApplicationDbContext context, ICurrentUserService currentUserService)
+        public PhotosController(
+            ApplicationDbContext context,
+            ICurrentUserService currentUserService,
+            IUserAccessService userAccessService)
         {
             _context = context;
             _currentUserService = currentUserService;
+            _userAccessService = userAccessService;
         }
 
         /// <summary>
@@ -97,15 +103,18 @@ namespace GA.Presentation.Controllers
             var tenantId     = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
 
-            var photos = await _context.Photos
-                .IgnoreQueryFilters()
-                .Where(p => p.EntityType == entityType
-                         && p.EntityId   == entityId
-                         && !p.IsDeleted
-                         && (isSuperAdmin ||
-                              p.TenantId == tenantId ||
-                              (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId) ||
-                              (tenantId == _yesilPanoTenantId && p.TenantId == _trugoTenantId)))
+            var filtered = await ApplyPhotoVisibilityFilter(
+                _context.Photos
+                    .IgnoreQueryFilters()
+                    .Where(p => p.EntityType == entityType
+                             && p.EntityId == entityId
+                             && !p.IsDeleted
+                             && (isSuperAdmin ||
+                                  p.TenantId == tenantId ||
+                                  (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId) ||
+                                  (tenantId == _yesilPanoTenantId && p.TenantId == _trugoTenantId))));
+
+            var photos = await filtered
                 .OrderBy(p => p.CreatedAt)
                 .Select(p => new PhotoDto
                 {
@@ -134,14 +143,17 @@ namespace GA.Presentation.Controllers
             var tenantId     = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
 
-            var photo = await _context.Photos
-                .IgnoreQueryFilters()
-                .Where(p => p.Id == id
-                         && !p.IsDeleted
-                         && (isSuperAdmin ||
-                              p.TenantId == tenantId ||
-                              (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId) ||
-                              (tenantId == _yesilPanoTenantId && p.TenantId == _trugoTenantId)))
+            var filtered = await ApplyPhotoVisibilityFilter(
+                _context.Photos
+                    .IgnoreQueryFilters()
+                    .Where(p => p.Id == id
+                             && !p.IsDeleted
+                             && (isSuperAdmin ||
+                                  p.TenantId == tenantId ||
+                                  (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId) ||
+                                  (tenantId == _yesilPanoTenantId && p.TenantId == _trugoTenantId))));
+
+            var photo = await filtered
                 .Select(p => new { p.Data, p.ContentType, p.FileName })
                 .FirstOrDefaultAsync();
 
@@ -173,6 +185,35 @@ namespace GA.Presentation.Controllers
             await _context.SaveChangesAsync();
 
             return NoContent();
+        }
+
+        private async Task<IQueryable<Photo>> ApplyPhotoVisibilityFilter(IQueryable<Photo> query)
+        {
+            if (_currentUserService.TenantId == Guid.Empty)
+                return query;
+
+            var canViewIsg = await _userAccessService.CanViewIsgPhotosAsync();
+            var canViewOperasyon = await _userAccessService.CanViewOperationPhotosAsync();
+
+            if (canViewIsg && canViewOperasyon)
+                return query;
+
+            if (canViewIsg && !canViewOperasyon)
+            {
+                return query.Where(p =>
+                    p.Description == null ||
+                    p.Description.ToUpper() == "ISG" ||
+                    p.Description.ToUpper() == "DIGER");
+            }
+
+            if (!canViewIsg && canViewOperasyon)
+            {
+                return query.Where(p =>
+                    p.Description == null ||
+                    p.Description.ToUpper() != "ISG");
+            }
+
+            return query.Where(_ => false);
         }
     }
 }

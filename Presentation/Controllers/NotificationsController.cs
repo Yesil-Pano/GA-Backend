@@ -54,7 +54,11 @@ namespace GA.Presentation.Controllers
                 // Sadece bu sahacıya hedeflenen bildirimler
                 query = query.Where(n => n.TargetUserId == userId);
             }
-            else if (!isSuperAdmin)
+            else if (isSuperAdmin)
+            {
+                query = query.Where(n => n.TargetUserId == null || n.TargetUserId == userId);
+            }
+            else
             {
                 query = query.Where(n => n.TenantId == tenantId);
             }
@@ -96,7 +100,9 @@ namespace GA.Presentation.Controllers
 
             if (isFieldWorker)
                 unreadQuery = unreadQuery.Where(n => n.TargetUserId == userId);
-            else if (!isSuperAdmin)
+            else if (isSuperAdmin)
+                unreadQuery = unreadQuery.Where(n => n.TargetUserId == null || n.TargetUserId == userId);
+            else
                 unreadQuery = unreadQuery.Where(n => n.TenantId == tenantId);
 
             if (!isFieldWorker)
