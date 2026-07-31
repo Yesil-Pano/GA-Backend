@@ -8,8 +8,11 @@ namespace GA.Application.Features.Auth
         /// <summary>Ofis ↔ ofis doğrudan mesajlaşma kanalı.</summary>
         Task<bool> CanAccessOfficeDirectChatAsync(CancellationToken ct = default);
 
-        /// <summary>Mobil tek kanal sohbet — yalnızca saha personeli.</summary>
+        /// <summary>Mobil tek kanal sohbet — yalnızca saha personeli (legacy kontrol).</summary>
         Task<bool> IsFieldWorkerOnlyForChatAsync(CancellationToken ct = default);
+
+        /// <summary>Mobil uygulamada Operasyon sohbet kanalını kullanabilir (tüm aktif personel).</summary>
+        Task<bool> CanUseMobileOperationsChatAsync(CancellationToken ct = default);
 
         Task<bool> IsSuperAdminAsync(CancellationToken ct = default);
 

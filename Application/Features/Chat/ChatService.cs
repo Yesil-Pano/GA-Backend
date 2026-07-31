@@ -44,8 +44,8 @@ namespace GA.Application.Features.Chat
             take = Math.Clamp(take, 1, 100);
             EnsureAuthenticated();
 
-            if (!await _userAccess.IsFieldWorkerOnlyForChatAsync(ct))
-                throw new InvalidOperationException("Bu uç nokta yalnızca saha personeli içindir.");
+            if (!await _userAccess.CanUseMobileOperationsChatAsync(ct))
+                throw new UnauthorizedAccessException("Sohbet için geçerli oturum gerekli.");
 
             var conv = await GetOrCreateFieldConversationAsync(_currentUser.UserId, ct);
             var unread = await CountUnreadAsync(conv.Id, _currentUser.UserId, ct);
@@ -75,11 +75,14 @@ namespace GA.Application.Features.Chat
                 .AsNoTracking()
                 .Include(u => u.FieldWorkerProfile)
                     .ThenInclude(f => f!.Projects)
-                .Where(u => !u.IsDeleted && u.FieldWorkerProfile != null && !u.FieldWorkerProfile.IsDeleted &&
+                .Where(u => !u.IsDeleted &&
                             (isSuperAdmin ||
                              u.TenantId == tenantId ||
                              (tenantId == TrugoTenantId && u.TenantId == YesilPanoTenantId) ||
-                             (tenantId == YesilPanoTenantId && u.TenantId == TrugoTenantId)));
+                             (tenantId == YesilPanoTenantId && u.TenantId == TrugoTenantId)) &&
+                            ((u.FieldWorkerProfile != null && !u.FieldWorkerProfile.IsDeleted) ||
+                             _context.Conversations.Any(c =>
+                                 !c.IsDeleted && c.FieldWorkerUserId == u.Id)));
 
             var workers = await workersQuery
                 .Select(u => new
@@ -88,11 +91,13 @@ namespace GA.Application.Features.Chat
                     u.FullName,
                     u.TenantId,
                     u.CustomerId,
-                    ProjectNames = u.FieldWorkerProfile!.Projects.Any()
-                        ? u.FieldWorkerProfile.Projects.Select(p => p.Name).ToList()
-                        : (string.IsNullOrWhiteSpace(u.FieldWorkerProfile.ProjectName)
-                            ? new List<string>()
-                            : new List<string> { u.FieldWorkerProfile.ProjectName! }),
+                    ProjectNames = u.FieldWorkerProfile != null
+                        ? (u.FieldWorkerProfile.Projects.Any()
+                            ? u.FieldWorkerProfile.Projects.Select(p => p.Name).ToList()
+                            : (string.IsNullOrWhiteSpace(u.FieldWorkerProfile.ProjectName)
+                                ? new List<string>()
+                                : new List<string> { u.FieldWorkerProfile.ProjectName! }))
+                        : new List<string>(),
                 })
                 .ToListAsync(ct);
 
@@ -185,19 +190,16 @@ namespace GA.Application.Features.Chat
             if (body.Length > 2000)
                 throw new InvalidOperationException("Mesaj en fazla 2000 karakter olabilir.");
 
-            var isFieldOnly = await _userAccess.IsFieldWorkerOnlyForChatAsync(ct);
             Conversation conv;
 
-            if (isFieldOnly)
+            if (!conversationId.HasValue)
             {
+                if (!await _userAccess.CanUseMobileOperationsChatAsync(ct))
+                    throw new UnauthorizedAccessException("Mobil sohbet için yetkiniz yok.");
                 conv = await GetOrCreateFieldConversationAsync(_currentUser.UserId, ct);
-                if (conversationId.HasValue && conversationId.Value != conv.Id)
-                    throw new UnauthorizedAccessException("Bu konuşmaya mesaj gönderemezsiniz.");
             }
             else
             {
-                if (!conversationId.HasValue)
-                    throw new InvalidOperationException("Konuşma kimliği zorunludur.");
                 conv = await GetConversationEntityAsync(conversationId.Value, ct)
                     ?? throw new KeyNotFoundException("Konuşma bulunamadı.");
                 await EnsureCanAccessConversationAsync(conv.Id, ct);
@@ -255,19 +257,24 @@ namespace GA.Application.Features.Chat
         public async Task<int> GetMyUnreadTotalAsync(CancellationToken ct = default)
         {
             EnsureAuthenticated();
-            if (await _userAccess.IsFieldWorkerOnlyForChatAsync(ct))
+            if (await _userAccess.CanUseMobileOperationsChatAsync(ct))
             {
                 var conv = await _context.Conversations
                     .IgnoreQueryFilters()
                     .AsNoTracking()
                     .FirstOrDefaultAsync(c =>
                         c.FieldWorkerUserId == _currentUser.UserId && !c.IsDeleted, ct);
-                if (conv == null) return 0;
-                return await CountUnreadAsync(conv.Id, _currentUser.UserId, ct);
+                if (conv != null)
+                    return await CountUnreadAsync(conv.Id, _currentUser.UserId, ct);
             }
 
-            var list = await ListConversationsAsync(partnerKey: null, ct);
-            return list.Sum(c => c.UnreadCount);
+            if (await _userAccess.CanAccessOfficeChatInboxAsync(ct))
+            {
+                var list = await ListConversationsAsync(partnerKey: null, ct);
+                return list.Sum(c => c.UnreadCount);
+            }
+
+            return 0;
         }
 
         private void EnsureAuthenticated()
@@ -324,9 +331,9 @@ namespace GA.Application.Features.Chat
             var conv = await GetConversationEntityAsync(conversationId, ct)
                 ?? throw new KeyNotFoundException("Konuşma bulunamadı.");
 
-            if (await _userAccess.IsFieldWorkerOnlyForChatAsync(ct))
+            if (conv.FieldWorkerUserId == _currentUser.UserId)
             {
-                if (conv.FieldWorkerUserId != _currentUser.UserId)
+                if (!await _userAccess.CanUseMobileOperationsChatAsync(ct))
                     throw new UnauthorizedAccessException("Bu konuşmaya erişemezsiniz.");
                 return;
             }

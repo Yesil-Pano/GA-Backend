@@ -79,6 +79,16 @@ namespace GA.Application.Features.Auth
                 .AnyAsync(p => p.UserId == _currentUser.UserId && !p.IsDeleted, ct);
         }
 
+        public async Task<bool> CanUseMobileOperationsChatAsync(CancellationToken ct = default)
+        {
+            if (_currentUser.UserId == Guid.Empty) return false;
+
+            return await _context.Users
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .AnyAsync(u => u.Id == _currentUser.UserId && !u.IsDeleted, ct);
+        }
+
         public async Task<bool> IsSuperAdminAsync(CancellationToken ct = default)
         {
             if (_currentUser.UserId == Guid.Empty) return false;

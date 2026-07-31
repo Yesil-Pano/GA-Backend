@@ -73,11 +73,24 @@ namespace GA.Application.Features.Auth
                     throw new Exception("Demo süreniz dolmuştur. Web ve mobil erişim kapatıldı.");
             }
 
-            return GenerateTokenResponse(user);
+            var roleNames = await _context.UserRoles
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(ur => ur.UserId == user.Id)
+                .Join(
+                    _context.Roles.IgnoreQueryFilters().AsNoTracking().Where(r => !r.IsDeleted),
+                    ur => ur.RoleId,
+                    r => r.Id,
+                    (_, r) => r.Name)
+                .Distinct()
+                .ToListAsync();
+
+            return GenerateTokenResponse(user, roleNames);
         }
 
-        private AuthResponse GenerateTokenResponse(User user)
+        private AuthResponse GenerateTokenResponse(User user, IReadOnlyList<string>? roleNames = null)
         {
+            roleNames ??= Array.Empty<string>();
             var jwtSettings = _configuration.GetSection("JwtSettings");
             var secretKey = Encoding.UTF8.GetBytes(jwtSettings["SecretKey"]!);
 
@@ -90,6 +103,9 @@ namespace GA.Application.Features.Auth
                 new Claim("TenantId", user.TenantId.ToString()),
                 new Claim("CustomerId", user.CustomerId?.ToString() ?? string.Empty)
             };
+
+            foreach (var role in roleNames)
+                claims.Add(new Claim(ClaimTypes.Role, role));
 
             var tokenDescriptor = new SecurityTokenDescriptor
             {
@@ -108,7 +124,8 @@ namespace GA.Application.Features.Auth
                 Token = tokenHandler.WriteToken(token),
                 UserId = user.Id.ToString(),
                 Username = user.Username,
-                FullName = user.FullName
+                FullName = user.FullName,
+                Roles = roleNames.ToList(),
             };
         }
     }
