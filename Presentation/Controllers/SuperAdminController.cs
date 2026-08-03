@@ -1,4 +1,6 @@
-﻿using GA.Core.Domain.Constants;
+﻿using GA.Application.Features.Users;
+using GA.Application.Features.Users.DTOs;
+using GA.Core.Domain.Constants;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
@@ -20,15 +22,18 @@ namespace GA.Presentation.Controllers
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
         private readonly IMemoryCache _cache;
+        private readonly IUserManagementService _userManagementService;
 
         public SuperAdminController(
             ApplicationDbContext context,
             ICurrentUserService currentUserService,
-            IMemoryCache cache)
+            IMemoryCache cache,
+            IUserManagementService userManagementService)
         {
             _context = context;
             _currentUserService = currentUserService;
             _cache = cache;
+            _userManagementService = userManagementService;
         }
 
         private async Task<bool> IsUserSuperAdmin()
@@ -196,37 +201,25 @@ namespace GA.Presentation.Controllers
         {
             if (!await IsUserSuperAdmin()) return Forbid();
 
-            var emailExists = await _context.Users.IgnoreQueryFilters().AnyAsync(u => u.Email == dto.Email);
-            if (emailExists) return BadRequest(new { Message = "Bu e-posta adresi sistemde zaten kayıtlı!" });
-
-            var user = new User
+            try
             {
-                Username = dto.Username,
-                Email = dto.Email,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
-                FullName = dto.FullName,
-                PhoneNumber = dto.PhoneNumber,
-                IsActive = true,
-                TenantId = dto.TenantId,
-                CreatedAt = DateTime.UtcNow
-            };
-
-            _context.Users.Add(user);
-            await _context.SaveChangesAsync();
-
-            var profile = new FieldWorkerProfile
+                var created = await _userManagementService.CreateUserAsync(new CreateManagedUserDto
+                {
+                    Username = dto.Username,
+                    Email = dto.Email,
+                    Password = dto.Password,
+                    FullName = dto.FullName,
+                    PhoneNumber = dto.PhoneNumber,
+                    TenantId = dto.TenantId,
+                    IsActive = true,
+                    RoleNames = new List<string> { RoleNames.FieldWorker },
+                });
+                return Ok(new { Message = $"'{created.FullName}' kullanıcısı ilgili firmaya başarıyla eklendi!" });
+            }
+            catch (InvalidOperationException ex)
             {
-                UserId = user.Id,
-                ProjectName = "-",
-                VehiclePlate = "-",
-                TeamLeader = "-",
-                HomeLocation = new NetTopologySuite.Geometries.Point(32.85411, 39.92077) { SRID = 4326 }
-            };
-
-            _context.FieldWorkerProfiles.Add(profile);
-            await _context.SaveChangesAsync();
-
-            return Ok(new { Message = $"'{user.FullName}' kullanıcısı ilgili firmaya başarıyla eklendi!" });
+                return BadRequest(new { Message = ex.Message });
+            }
         }
     }
 

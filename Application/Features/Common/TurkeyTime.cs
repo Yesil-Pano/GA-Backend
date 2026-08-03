@@ -45,5 +45,23 @@ namespace GA.Application.Features.Common
             var mins = (int)Math.Round((completedAtUtc.Value - startedAtUtc.Value).TotalMinutes);
             return mins < 0 ? 0 : mins;
         }
+
+        public static DateTime ToLocal(DateTime utc)
+        {
+            var dto = utc.Kind switch
+            {
+                DateTimeKind.Utc => utc,
+                DateTimeKind.Local => utc.ToUniversalTime(),
+                _ => DateTime.SpecifyKind(utc, DateTimeKind.Utc),
+            };
+            return TimeZoneInfo.ConvertTimeFromUtc(dto, Istanbul);
+        }
+
+        public static DateTime ToUtc(DateTime localUnspecified)
+        {
+            return TimeZoneInfo.ConvertTimeToUtc(
+                DateTime.SpecifyKind(localUnspecified, DateTimeKind.Unspecified),
+                Istanbul);
+        }
     }
 }

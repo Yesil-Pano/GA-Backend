@@ -26,6 +26,7 @@ namespace GA.Presentation.Controllers
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
         private readonly IPeriodicWorkOrderService _periodicWorkOrderService;
+        private readonly IPeriodicScheduleService _periodicScheduleService;
         private readonly INotificationService _notificationService;
         private readonly IPushNotificationService _pushNotificationService;
         private readonly ITranslationService _translationService;
@@ -38,6 +39,7 @@ namespace GA.Presentation.Controllers
             ApplicationDbContext context,
             ICurrentUserService currentUserService,
             IPeriodicWorkOrderService periodicWorkOrderService,
+            IPeriodicScheduleService periodicScheduleService,
             INotificationService notificationService,
             IPushNotificationService pushNotificationService,
             ITranslationService translationService,
@@ -46,6 +48,7 @@ namespace GA.Presentation.Controllers
             _context = context;
             _currentUserService = currentUserService;
             _periodicWorkOrderService = periodicWorkOrderService;
+            _periodicScheduleService = periodicScheduleService;
             _notificationService = notificationService;
             _pushNotificationService = pushNotificationService;
             _translationService = translationService;
@@ -64,9 +67,29 @@ namespace GA.Presentation.Controllers
             var result = await _periodicWorkOrderService.ProcessDueAsync();
             return Ok(new
             {
-                message = "Periyodik otomasyon çalıştırıldı.",
+                message = "Periyodik otomasyon çalıştırıldı (eski model — yeni iş emirleri önceden üretilir).",
                 templatesProcessed = result.TemplatesProcessed,
                 workOrdersCreated = result.WorkOrdersCreated,
+            });
+        }
+
+        /// <summary>
+        /// Periyodik şablonlar için yıl sonuna kadar eksik dönemleri oluşturur. Yalnızca Super Admin.
+        /// POST /api/workorders/periodic/backfill
+        /// </summary>
+        [HttpPost("periodic/backfill")]
+        public async Task<IActionResult> BackfillPeriodicPeriods()
+        {
+            if (_currentUserService.TenantId != Guid.Empty)
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin kullanabilir." });
+
+            var result = await _periodicScheduleService.BackfillAllTemplatesAsync();
+            return Ok(new
+            {
+                message = $"Backfill tamamlandı: {result.PeriodsCreated} dönem eklendi ({result.TemplatesProcessed} şablon).",
+                result.TemplatesProcessed,
+                result.PeriodsCreated,
+                result.PeriodLabelsUpdated,
             });
         }
 
@@ -85,17 +108,13 @@ namespace GA.Presentation.Controllers
                              (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
                              (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
 
-            // Mobil saha ekranı: yalnızca oturum açan kullanıcıya atanmış iş emirleri
-            if (scope == "mine" && userId != Guid.Empty && !isSuperAdmin)
+            // Mobil saha ekranı: yalnızca oturum açan kullanıcıya atanmış iş emirleri (Super Admin dahil)
+            if (scope == "mine" && userId != Guid.Empty)
             {
                 query = query.Where(w => w.AssignedToUserId == userId);
 
                 var nowUtc = DateTime.UtcNow;
-                var monthStart = new DateTime(nowUtc.Year, nowUtc.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-                var monthEnd = monthStart.AddMonths(1);
-                query = query.Where(w =>
-                    w.ParentWorkOrderId == null ||
-                    (w.StartDate >= monthStart && w.StartDate < monthEnd));
+                query = query.Where(w => w.StartDate <= nowUtc && w.EndDate >= nowUtc);
             }
 
             if (isSuperAdmin)
@@ -412,17 +431,28 @@ namespace GA.Presentation.Controllers
 
                 TenantId = targetTenantId,
 
-                Status = "Devam Ediyor"
+                Status = WorkOrderStatus.ResolveForCreate(assignedToUserId.HasValue && assignedToUserId.Value != Guid.Empty)
             };
 
             _context.WorkOrders.Add(workOrder);
             await _context.SaveChangesAsync();
 
+            if (workOrder.IsPeriodic)
+            {
+                PeriodicScheduleService.EnsureTemplatePeriodLabel(
+                    workOrder,
+                    PeriodicScheduleService.GetLocalYear(workOrder.StartDate));
+                await _periodicScheduleService.EnsureYearPeriodsAsync(workOrder);
+                await _context.SaveChangesAsync();
+            }
+
             await DispatchWorkOrderCreateNotificationsAsync(workOrder, userId, isSuperAdmin);
 
             return Ok(new
             {
-                message = "İş emri başarıyla oluşturuldu ve saha ekiplerinin ekranına düştü!",
+                message = assignedToUserId.HasValue
+                    ? "İş emri oluşturuldu ve personele atandı."
+                    : "İş emri oluşturuldu. Super Admin atama yapana kadar bekleyecektir.",
                 id = workOrder.Id,
             });
         }
@@ -509,7 +539,7 @@ namespace GA.Presentation.Controllers
                     CityId = resolved.CityId,
                     DistrictId = resolved.DistrictId,
                     TenantId = isSuperAdmin ? station.TenantId : (tenantId == Guid.Empty ? station.TenantId : tenantId),
-                    Status = "Devam Ediyor",
+                    Status = WorkOrderStatus.ResolveForCreate(assignee != null),
                 };
 
                 _context.WorkOrders.Add(workOrder);
@@ -521,8 +551,17 @@ namespace GA.Presentation.Controllers
             foreach (var id in createdIds)
             {
                 var wo = await _context.WorkOrders.IgnoreQueryFilters().FirstAsync(w => w.Id == id);
+                if (wo.IsPeriodic)
+                {
+                    PeriodicScheduleService.EnsureTemplatePeriodLabel(
+                        wo,
+                        PeriodicScheduleService.GetLocalYear(wo.StartDate));
+                    await _periodicScheduleService.EnsureYearPeriodsAsync(wo);
+                }
                 await DispatchWorkOrderCreateNotificationsAsync(wo, userId, isSuperAdmin);
             }
+
+            await _context.SaveChangesAsync();
 
             return Ok(new
             {
@@ -567,12 +606,13 @@ namespace GA.Presentation.Controllers
                 // Sahacı atanınca operasyon sorumlusu ve işi açan yetkili de aynı kişiye çekilir
                 workOrder.OperationUserId = assignee.Id;
                 workOrder.OpenedByUserId = assignee.Id;
+                WorkOrderStatus.ApplyOnAssign(workOrder);
                 await _context.SaveChangesAsync();
 
                 await _notificationService.NotifyAsync(
                     "WorkOrderAssigned",
                     "Size iş emri atandı",
-                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    WorkOrderNotificationMessages.Body(workOrder),
                     workOrder.TenantId,
                     workOrder.Id,
                     _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId,
@@ -581,7 +621,7 @@ namespace GA.Presentation.Controllers
                 await _pushNotificationService.SendToUserAsync(
                     assignee.Id,
                     "Size iş emri atandı",
-                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    WorkOrderNotificationMessages.Body(workOrder),
                     new Dictionary<string, object>
                     {
                         ["type"] = "WorkOrderAssigned",
@@ -602,6 +642,7 @@ namespace GA.Presentation.Controllers
 
             var previousAssignee = workOrder.AssignedToUserId;
             workOrder.AssignedToUserId = null;
+            WorkOrderStatus.ApplyOnUnassign(workOrder);
             await _context.SaveChangesAsync();
 
             await _notificationService.NotifyAsync(
@@ -628,7 +669,14 @@ namespace GA.Presentation.Controllers
             var workOrder = await FindWorkOrderForMutationAsync(id);
             if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
 
+            var assigneeError = EnsureAssigneeForFieldMutation(workOrder);
+            if (assigneeError != null) return assigneeError;
+
             var status = (dto.Status ?? string.Empty).Trim();
+            var transitionError = WorkOrderStatus.ValidateFieldTransition(workOrder.Status, status);
+            if (transitionError != null)
+                return BadRequest(new { message = transitionError });
+
             workOrder.Status = status;
 
             if (!string.IsNullOrWhiteSpace(dto.FieldNote))
@@ -641,20 +689,20 @@ namespace GA.Presentation.Controllers
             var now = DateTime.UtcNow;
 
             // Gerçek başlangıç: ilk "İşe Başla" anı — sonraki geçişlerde korunur
-            if (string.Equals(status, "Devam Ediyor", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(status, WorkOrderStatus.InProgress, StringComparison.OrdinalIgnoreCase))
             {
                 workOrder.StartedAt ??= now;
             }
 
             // Normal kapanış
-            if (string.Equals(status, "Tamamlandı", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(status, WorkOrderStatus.Completed, StringComparison.OrdinalIgnoreCase))
             {
                 workOrder.CompletedAt ??= now;
             }
 
             // İptal — CompletedAt yazılmaz
-            if (string.Equals(status, "İptal", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(status, "İptal Edildi", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(status, WorkOrderStatus.Cancelled, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(status, WorkOrderStatus.CancelledAlt, StringComparison.OrdinalIgnoreCase))
             {
                 workOrder.CancelledAt ??= now;
             }
@@ -734,12 +782,13 @@ namespace GA.Presentation.Controllers
                 workOrder.OperationUserId = assignee.Id;
                 workOrder.OpenedByUserId = assignee.Id;
                 workOrder.UpdatedAt = DateTime.UtcNow;
+                WorkOrderStatus.ApplyOnAssign(workOrder);
                 updated++;
 
                 await _notificationService.NotifyAsync(
                     "WorkOrderAssigned",
                     "Size iş emri atandı",
-                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    WorkOrderNotificationMessages.Body(workOrder),
                     workOrder.TenantId,
                     workOrder.Id,
                     actorId,
@@ -748,7 +797,7 @@ namespace GA.Presentation.Controllers
                 await _pushNotificationService.SendToUserAsync(
                     assignee.Id,
                     "Size iş emri atandı",
-                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    WorkOrderNotificationMessages.Body(workOrder),
                     new Dictionary<string, object>
                     {
                         ["type"] = "WorkOrderAssigned",
@@ -799,19 +848,28 @@ namespace GA.Presentation.Controllers
         [HttpGet("{templateId:guid}/occurrences")]
         public async Task<IActionResult> GetPeriodicOccurrences(Guid templateId)
         {
-            var template = await _context.WorkOrders
+            var root = await _context.WorkOrders
                 .IgnoreQueryFilters()
                 .AsNoTracking()
                 .FirstOrDefaultAsync(w => w.Id == templateId && !w.IsDeleted);
 
-            if (template == null)
+            if (root == null)
                 return NotFound(new { message = "İş emri bulunamadı." });
 
-            var occurrences = await _context.WorkOrders
+            var templateIdResolved = root.ParentWorkOrderId ?? root.Id;
+            var template = root.ParentWorkOrderId.HasValue
+                ? await _context.WorkOrders.IgnoreQueryFilters().AsNoTracking()
+                    .FirstOrDefaultAsync(w => w.Id == templateIdResolved && !w.IsDeleted)
+                : root;
+
+            if (template == null)
+                return NotFound(new { message = "Periyodik şablon bulunamadı." });
+
+            var children = await _context.WorkOrders
                 .IgnoreQueryFilters()
                 .AsNoTracking()
-                .Where(w => !w.IsDeleted && w.ParentWorkOrderId == templateId)
-                .OrderByDescending(w => w.StartDate)
+                .Where(w => !w.IsDeleted && w.ParentWorkOrderId == template.Id)
+                .OrderBy(w => w.StartDate)
                 .Select(w => new
                 {
                     id = w.Id,
@@ -823,16 +881,126 @@ namespace GA.Presentation.Controllers
                     assignedToUserName = w.AssignedToUserId == null
                         ? "Atanmamış"
                         : (_context.Users.Where(u => u.Id == w.AssignedToUserId).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış"),
+                    isTemplate = false,
+                    periodIndex = 0,
                 })
                 .ToListAsync();
 
+            var templateRow = new
+            {
+                id = template.Id,
+                periodLabel = template.PeriodLabel ?? PeriodicScheduleService.FormatPeriodLabel(
+                    template.StartDate,
+                    PeriodicScheduleService.GetLocalYear(template.StartDate)),
+                startDate = template.StartDate.ToString("yyyy-MM-dd HH:mm"),
+                endDate = template.EndDate.ToString("yyyy-MM-dd HH:mm"),
+                status = template.Status,
+                assignedToUserId = template.AssignedToUserId,
+                assignedToUserName = template.AssignedToUserId == null
+                    ? "Atanmamış"
+                    : (_context.Users.Where(u => u.Id == template.AssignedToUserId).Select(u => u.FullName).FirstOrDefault() ?? "Atanmamış"),
+                isTemplate = true,
+                periodIndex = 1,
+            };
+
+            var occurrences = new List<object> { templateRow };
+            var index = 2;
+            foreach (var child in children)
+            {
+                occurrences.Add(new
+                {
+                    child.id,
+                    child.periodLabel,
+                    child.startDate,
+                    child.endDate,
+                    child.status,
+                    child.assignedToUserId,
+                    child.assignedToUserName,
+                    child.isTemplate,
+                    periodIndex = index++,
+                });
+            }
+
             return Ok(new
             {
-                templateId,
+                templateId = template.Id,
                 isPeriodic = template.IsPeriodic,
                 title = template.Title,
                 customerName = template.CustomerName,
+                calendarYear = PeriodicScheduleService.GetLocalYear(template.StartDate),
                 occurrences,
+            });
+        }
+
+        /// <summary>
+        /// Seçilen dönemden itibaren (dahil) sonraki tüm dönemlere atama. POST /api/workorders/{id}/reassign-forward
+        /// </summary>
+        [HttpPost("{id:guid}/reassign-forward")]
+        public async Task<IActionResult> ReassignOccurrenceForward(Guid id, [FromBody] AssignWorkOrderDto dto)
+        {
+            if (_currentUserService.TenantId != Guid.Empty)
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin kullanabilir." });
+
+            if (!dto.AssignedToUserId.HasValue || dto.AssignedToUserId.Value == Guid.Empty)
+                return BadRequest(new { message = "Atanacak saha personeli seçilmelidir." });
+
+            var anchor = await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted);
+
+            if (anchor == null)
+                return NotFound(new { message = "İş emri bulunamadı." });
+
+            var templateId = anchor.ParentWorkOrderId ?? anchor.Id;
+            if (!anchor.IsPeriodic && !anchor.ParentWorkOrderId.HasValue)
+                return BadRequest(new { message = "Yalnızca periyodik iş emri dönemleri güncellenebilir." });
+
+            var assignee = await _context.Users
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(u => u.Id == dto.AssignedToUserId.Value
+                                          && !u.IsDeleted && u.IsActive
+                                          && u.FieldWorkerProfile != null);
+
+            if (assignee == null)
+                return BadRequest(new { message = "Seçilen saha personeli bulunamadı." });
+
+            var anchorStart = anchor.StartDate;
+            var periods = await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .Where(w => !w.IsDeleted &&
+                            (w.Id == templateId || w.ParentWorkOrderId == templateId) &&
+                            w.StartDate >= anchorStart)
+                .ToListAsync();
+
+            var updated = 0;
+            foreach (var period in periods)
+            {
+                if (WorkOrderStatus.IsTerminal(period.Status))
+                    continue;
+
+                period.AssignedToUserId = assignee.Id;
+                WorkOrderStatus.ApplyOnAssign(period);
+                period.UpdatedAt = DateTime.UtcNow;
+                updated++;
+            }
+
+            await _context.SaveChangesAsync();
+
+            await _notificationService.NotifyAsync(
+                "WorkOrderAssigned",
+                "Periyodik dönem ataması güncellendi",
+                $"{anchor.CustomerName}: {updated} dönem → {assignee.FullName}",
+                anchor.TenantId,
+                anchor.Id,
+                _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId,
+                assignee.Id);
+
+            return Ok(new
+            {
+                message = $"{updated} dönem {assignee.FullName} kişisine atandı.",
+                updatedCount = updated,
+                assignedToUserId = assignee.Id,
+                assignedToUserName = assignee.FullName,
             });
         }
 
@@ -854,7 +1022,7 @@ namespace GA.Presentation.Controllers
                 return NotFound(new { message = "İş emri bulunamadı." });
 
             if (!workOrder.ParentWorkOrderId.HasValue && !workOrder.IsPeriodic)
-                return BadRequest(new { message = "Yalnızca periyodik klonlar yeniden atanabilir." });
+                return BadRequest(new { message = "Yalnızca periyodik iş emri dönemleri yeniden atanabilir." });
 
             if (!dto.AssignedToUserId.HasValue || dto.AssignedToUserId.Value == Guid.Empty)
                 return BadRequest(new { message = "Atanacak saha personeli seçilmelidir." });
@@ -870,12 +1038,13 @@ namespace GA.Presentation.Controllers
 
             workOrder.AssignedToUserId = assignee.Id;
             workOrder.UpdatedAt = DateTime.UtcNow;
+            WorkOrderStatus.ApplyOnAssign(workOrder);
             await _context.SaveChangesAsync();
 
             await _notificationService.NotifyAsync(
                 "WorkOrderAssigned",
                 "Size iş emri atandı",
-                $"{workOrder.CustomerName}: {workOrder.Title}",
+                WorkOrderNotificationMessages.Body(workOrder),
                 workOrder.TenantId,
                 workOrder.Id,
                 _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId,
@@ -884,7 +1053,7 @@ namespace GA.Presentation.Controllers
             await _pushNotificationService.SendToUserAsync(
                 assignee.Id,
                 "Size iş emri atandı",
-                $"{workOrder.CustomerName}: {workOrder.Title}",
+                WorkOrderNotificationMessages.Body(workOrder),
                 new Dictionary<string, object>
                 {
                     ["type"] = "WorkOrderAssigned",
@@ -1135,6 +1304,25 @@ namespace GA.Presentation.Controllers
         }
 
         /// <summary>
+        /// Saha mobil işlemleri (durum, not): yalnızca atanan personel.
+        /// Super Admin web yönetimi ayrı uç noktalardan yapılır (assign, bulk-approve).
+        /// </summary>
+        private IActionResult? EnsureAssigneeForFieldMutation(WorkOrder workOrder)
+        {
+            var userId = _currentUserService.UserId;
+            if (userId == Guid.Empty)
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Oturum gerekli." });
+
+            if (!workOrder.AssignedToUserId.HasValue || workOrder.AssignedToUserId.Value == Guid.Empty)
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Atanmamış iş emri üzerinde saha işlemi yapılamaz." });
+
+            if (workOrder.AssignedToUserId.Value != userId)
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Bu iş emri size atanmadı." });
+
+            return null;
+        }
+
+        /// <summary>
         /// Mutasyon için iş emri bul: kendi tenant + Trugo↔YeşilPano çapraz +
         /// kendisine atanmış iş emri (tenant fark etmez).
         /// </summary>
@@ -1183,7 +1371,7 @@ namespace GA.Presentation.Controllers
             await _notificationService.NotifyAsync(
                 "WorkOrderAssigned",
                 "Size iş emri atandı",
-                $"{workOrder.CustomerName}: {workOrder.Title}",
+                WorkOrderNotificationMessages.Body(workOrder),
                 workOrder.TenantId,
                 workOrder.Id,
                 actorUserId == Guid.Empty ? null : actorUserId,
@@ -1192,7 +1380,7 @@ namespace GA.Presentation.Controllers
             await _pushNotificationService.SendToUserAsync(
                 assigneeId,
                 "Size iş emri atandı",
-                $"{workOrder.CustomerName}: {workOrder.Title}",
+                WorkOrderNotificationMessages.Body(workOrder),
                 new Dictionary<string, object>
                 {
                     ["type"] = "WorkOrderAssigned",
@@ -1221,7 +1409,7 @@ namespace GA.Presentation.Controllers
                 await _notificationService.NotifyAsync(
                     "WorkOrderCreated",
                     "Yeni iş emri oluşturuldu",
-                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    WorkOrderNotificationMessages.Body(workOrder),
                     workOrder.TenantId,
                     workOrder.Id,
                     actorUserId == Guid.Empty ? null : actorUserId,
@@ -1230,7 +1418,7 @@ namespace GA.Presentation.Controllers
                 await _pushNotificationService.SendToUserAsync(
                     adminId,
                     "Yeni iş emri oluşturuldu",
-                    $"{workOrder.CustomerName}: {workOrder.Title}",
+                    WorkOrderNotificationMessages.Body(workOrder),
                     new Dictionary<string, object>
                     {
                         ["type"] = "WorkOrderCreated",

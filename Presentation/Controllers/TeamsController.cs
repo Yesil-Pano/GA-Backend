@@ -1,4 +1,5 @@
 ﻿using GA.Application.Features.Auth;
+using GA.Application.Features.WorkOrders;
 using GA.Application.Features.Partners;
 using GA.Core.Domain.Constants;
 using GA.Core.Domain.Entities;
@@ -365,7 +366,12 @@ namespace GA.Presentation.Controllers
                 user.FieldWorkerProfile.UpdatedAt = DateTime.UtcNow;
             }
 
-            var openStatuses = new[] { "Devam Ediyor" };
+            var openStatuses = new[]
+            {
+                WorkOrderStatus.Unassigned,
+                WorkOrderStatus.Waiting,
+                WorkOrderStatus.InProgress,
+            };
             var openOrders = await _context.WorkOrders
                 .IgnoreQueryFilters()
                 .Where(w => !w.IsDeleted
@@ -376,6 +382,7 @@ namespace GA.Presentation.Controllers
             foreach (var order in openOrders)
             {
                 order.AssignedToUserId = null;
+                WorkOrderStatus.ApplyOnUnassign(order);
             }
 
             await _context.SaveChangesAsync();

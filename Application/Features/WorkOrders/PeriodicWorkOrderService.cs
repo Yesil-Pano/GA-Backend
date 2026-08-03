@@ -116,7 +116,7 @@ namespace GA.Application.Features.WorkOrders
                     await _notificationService.NotifyAsync(
                         "WorkOrderPeriodic",
                         "Periyodik iş emri açıldı",
-                        $"{wo.CustomerName}: {wo.Title}",
+                        WorkOrderNotificationMessages.Body(wo),
                         wo.TenantId,
                         wo.Id,
                         null,
@@ -128,10 +128,10 @@ namespace GA.Application.Features.WorkOrders
                         await _pushNotificationService.SendToUserAsync(
                             wo.AssignedToUserId.Value,
                             "Periyodik iş emri atandı",
-                            $"{wo.CustomerName}: {wo.Title}",
+                            WorkOrderNotificationMessages.Body(wo),
                             new Dictionary<string, object>
                             {
-                                ["type"] = "WorkOrderAssigned",
+                                ["type"] = "WorkOrderPeriodic",
                                 ["workOrderId"] = wo.Id.ToString(),
                             },
                             cancellationToken);
@@ -176,7 +176,7 @@ namespace GA.Application.Features.WorkOrders
                 IsPeriodic = false,
                 RecurrenceInterval = "None",
                 NextExecutionDate = null,
-                Status = "Devam Ediyor",
+                Status = WorkOrderStatus.ResolveForCreate(template.AssignedToUserId.HasValue && template.AssignedToUserId != Guid.Empty),
                 ParentWorkOrderId = template.Id,
                 PeriodLabel = start.ToString("yyyy-MM"),
             };

@@ -11,7 +11,7 @@ namespace GA.Core.Domain.Entities
         public string MobileDescription { get; set; } = string.Empty;
         public string Address { get; set; } = string.Empty;
         public string Priority { get; set; } = "Orta";
-        public string Status { get; set; } = "Devam Ediyor";
+        public string Status { get; set; } = "Atanmamış";
         public string WorkType { get; set; } = "Arıza";
         public string WorkCategory { get; set; } = "Arıza Bildirimi";
 

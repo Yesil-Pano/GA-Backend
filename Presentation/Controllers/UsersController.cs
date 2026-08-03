@@ -1,14 +1,13 @@
-﻿using GA.Core.Domain.Constants;
-using GA.Application.Features.Auth;
+﻿using GA.Application.Features.Auth;
+using GA.Application.Features.Users;
+using GA.Application.Features.Users.DTOs;
+using GA.Core.Domain.Constants;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System;
-using System.Linq;
-using System.Threading.Tasks;
 
 namespace GA.Presentation.Controllers
 {
@@ -22,19 +21,22 @@ namespace GA.Presentation.Controllers
         private readonly ICurrentUserService _currentUserService;
         private readonly ApplicationDbContext _context;
         private readonly IUserAccessService _userAccessService;
+        private readonly IUserManagementService _userManagementService;
 
         public UsersController(
             IGenericRepository<User> userRepository,
             IGenericRepository<Tenant> tenantRepository,
             ICurrentUserService currentUserService,
             ApplicationDbContext context,
-            IUserAccessService userAccessService)
+            IUserAccessService userAccessService,
+            IUserManagementService userManagementService)
         {
             _userRepository = userRepository;
             _tenantRepository = tenantRepository;
             _currentUserService = currentUserService;
             _context = context;
             _userAccessService = userAccessService;
+            _userManagementService = userManagementService;
         }
 
         [HttpGet("me")]
@@ -140,12 +142,18 @@ namespace GA.Presentation.Controllers
             return File(doc.Data, doc.ContentType ?? "application/pdf");
         }
 
-        /// <summary>Super Admin: ofis kullanıcıları listesi. GET /api/users</summary>
+        /// <summary>Super Admin: kullanıcı listesi. GET /api/users</summary>
         [HttpGet]
         public async Task<IActionResult> ListUsers()
         {
             if (!await _userAccessService.IsSuperAdminAsync())
                 return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin erişebilir." });
+
+            var tenantLookup = await _context.Tenants
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(t => !t.IsDeleted)
+                .ToDictionaryAsync(t => t.Id, t => t.Name);
 
             var users = await _context.Users
                 .IgnoreQueryFilters()
@@ -155,8 +163,10 @@ namespace GA.Presentation.Controllers
                 .Select(u => new
                 {
                     id = u.Id,
+                    username = u.Username,
                     fullName = u.FullName,
                     email = u.Email,
+                    phoneNumber = u.PhoneNumber,
                     tenantId = u.TenantId,
                     isActive = u.IsActive,
                     roles = _context.UserRoles
@@ -166,7 +176,76 @@ namespace GA.Presentation.Controllers
                 })
                 .ToListAsync();
 
-            return Ok(users);
+            var result = users.Select(u => new
+            {
+                u.id,
+                u.username,
+                u.fullName,
+                u.email,
+                u.phoneNumber,
+                u.tenantId,
+                tenantName = u.tenantId == Guid.Empty
+                    ? "Sistem (Super Admin)"
+                    : (tenantLookup.TryGetValue(u.tenantId, out var name) ? name : "—"),
+                u.isActive,
+                u.roles,
+            });
+
+            return Ok(result);
+        }
+
+        /// <summary>Super Admin: firma listesi (dropdown). GET /api/users/tenants</summary>
+        [HttpGet("tenants")]
+        public async Task<IActionResult> ListTenants()
+        {
+            if (!await _userAccessService.IsSuperAdminAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin erişebilir." });
+
+            var tenants = await _context.Tenants
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(t => !t.IsDeleted && t.IsActive)
+                .OrderBy(t => t.Name)
+                .Select(t => new { id = t.Id, name = t.Name })
+                .ToListAsync();
+
+            return Ok(tenants);
+        }
+
+        /// <summary>Super Admin: yeni kullanıcı. POST /api/users</summary>
+        [HttpPost]
+        public async Task<IActionResult> CreateUser([FromBody] CreateManagedUserDto dto)
+        {
+            if (!await _userAccessService.IsSuperAdminAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin erişebilir." });
+
+            try
+            {
+                var created = await _userManagementService.CreateUserAsync(dto);
+                return Ok(new { message = "Kullanıcı oluşturuldu.", user = created });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
+        /// <summary>Super Admin: kullanıcı güncelle. PUT /api/users/{id}</summary>
+        [HttpPut("{id:guid}")]
+        public async Task<IActionResult> UpdateUser(Guid id, [FromBody] UpdateManagedUserDto dto)
+        {
+            if (!await _userAccessService.IsSuperAdminAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin erişebilir." });
+
+            try
+            {
+                var updated = await _userManagementService.UpdateUserAsync(id, dto);
+                return Ok(new { message = "Kullanıcı güncellendi.", user = updated });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
         }
 
         /// <summary>Super Admin: kullanıcı rollerini güncelle. PUT /api/users/{id}/roles</summary>
@@ -178,34 +257,30 @@ namespace GA.Presentation.Controllers
 
             var user = await _context.Users
                 .IgnoreQueryFilters()
-                .Include(u => u.UserRoles)
+                .AsNoTracking()
                 .FirstOrDefaultAsync(u => u.Id == id && !u.IsDeleted);
 
             if (user == null)
                 return NotFound(new { message = "Kullanıcı bulunamadı." });
 
-            var requested = (dto.RoleNames ?? new List<string>())
-                .Where(r => !string.IsNullOrWhiteSpace(r))
-                .Select(r => r.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            var validRoles = await _context.Roles
-                .IgnoreQueryFilters()
-                .Where(r => !r.IsDeleted && requested.Contains(r.Name))
-                .ToListAsync();
-
-            if (validRoles.Count != requested.Count)
-                return BadRequest(new { message = "Geçersiz rol adı içeriyor." });
-
-            _context.UserRoles.RemoveRange(user.UserRoles);
-            foreach (var role in validRoles)
+            try
             {
-                _context.UserRoles.Add(new UserRole { UserId = user.Id, RoleId = role.Id });
+                var updated = await _userManagementService.UpdateUserAsync(id, new UpdateManagedUserDto
+                {
+                    Username = user.Username,
+                    Email = user.Email,
+                    FullName = user.FullName,
+                    PhoneNumber = user.PhoneNumber,
+                    TenantId = user.TenantId,
+                    IsActive = user.IsActive,
+                    RoleNames = dto.RoleNames ?? new List<string>(),
+                });
+                return Ok(new { message = "Roller güncellendi.", roles = updated.Roles });
             }
-
-            await _context.SaveChangesAsync();
-            return Ok(new { message = "Roller güncellendi.", roles = validRoles.Select(r => r.Name).ToList() });
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
         }
 
         /// <summary>Super Admin: atanabilir roller. GET /api/users/roles</summary>
@@ -218,7 +293,7 @@ namespace GA.Presentation.Controllers
             var roles = await _context.Roles
                 .IgnoreQueryFilters()
                 .AsNoTracking()
-                .Where(r => !r.IsDeleted)
+                .Where(r => !r.IsDeleted && r.Name != RoleNames.SuperAdmin)
                 .OrderBy(r => r.Name)
                 .Select(r => new { id = r.Id, name = r.Name, description = r.Description })
                 .ToListAsync();

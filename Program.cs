@@ -1,4 +1,5 @@
 using GA.Application.Features.Auth;
+using GA.Application.Features.Users;
 using GA.Application.Features.Chat;
 using GA.Application.Features.Location;
 using GA.Application.Features.Notifications;
@@ -46,6 +47,7 @@ builder.Services.AddScoped<ILocationService, LocationService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<IUserAccessService, UserAccessService>();
+builder.Services.AddScoped<IUserManagementService, UserManagementService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IPushNotificationService, ExpoPushNotificationService>();
 builder.Services.AddHttpClient("expo-push", client =>
@@ -70,6 +72,7 @@ builder.Services.AddMemoryCache();
 // Periyodik iş emri otomasyonu
 builder.Services.Configure<PeriodicWorkOrdersOptions>(
     builder.Configuration.GetSection(PeriodicWorkOrdersOptions.SectionName));
+builder.Services.AddScoped<IPeriodicScheduleService, PeriodicScheduleService>();
 builder.Services.AddScoped<IPeriodicWorkOrderService, PeriodicWorkOrderService>();
 builder.Services.AddHostedService<PeriodicWorkOrderHostedService>();
 
@@ -179,5 +182,15 @@ app.MapControllers();
 // SignalR hub endpoint
 app.MapHub<LocationHub>("/hubs/location");
 app.MapHub<ChatHub>("/hubs/chat");
+
+if (args.Contains("--backfill-periods", StringComparer.OrdinalIgnoreCase))
+{
+    using var scope = app.Services.CreateScope();
+    var schedule = scope.ServiceProvider.GetRequiredService<IPeriodicScheduleService>();
+    var result = await schedule.BackfillAllTemplatesAsync();
+    Console.WriteLine(
+        $"Backfill OK: templates={result.TemplatesProcessed}, periods={result.PeriodsCreated}, labels={result.PeriodLabelsUpdated}");
+    return;
+}
 
 app.Run();

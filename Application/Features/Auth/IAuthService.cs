@@ -6,5 +6,7 @@ namespace GA.Application.Features.Auth
     {
         Task<AuthResponse> LoginAsync(LoginRequest request);
         Task<AuthResponse> RegisterAsync(RegisterRequest request);
+        Task<AuthResponse> RefreshAsync(RefreshTokenRequest request);
+        Task RevokeRefreshTokenAsync(string refreshToken);
     }
 }

@@ -140,8 +140,8 @@ namespace GA.Presentation.Controllers
                     acilCount = all.Count(w => w.Priority == "Acil"),
                     ortaCount = all.Count(w => w.Priority == "Orta"),
                     dusukCount = all.Count(w => w.Priority == "Düşük"),
-                    devamEdiyorCount = all.Count(w =>
-                        w.Status == "Devam Ediyor" || w.Status == "Bekliyor"),
+                    devamEdiyorCount = all.Count(w => w.Status == "Devam Ediyor"),
+                    bekliyorCount = all.Count(w => w.Status == "Bekliyor"),
                     tamamlandiCount = all.Count(w => w.Status == "Tamamlandı"),
                     iptalEdildiCount = all.Count(w =>
                         w.Status == "İptal Edildi" || w.Status == "İptal"),
