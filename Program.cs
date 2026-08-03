@@ -58,6 +58,7 @@ builder.Services.AddHttpClient("expo-push", client =>
 });
 builder.Services.AddScoped<IChatService, ChatService>();
 builder.Services.AddScoped<IOfficeChatService, OfficeChatService>();
+builder.Services.AddScoped<LegacyFieldChatMigrator>();
 
 builder.Services.Configure<TranslationOptions>(
     builder.Configuration.GetSection(TranslationOptions.SectionName));
@@ -191,6 +192,12 @@ if (args.Contains("--backfill-periods", StringComparer.OrdinalIgnoreCase))
     Console.WriteLine(
         $"Backfill OK: templates={result.TemplatesProcessed}, periods={result.PeriodsCreated}, labels={result.PeriodLabelsUpdated}");
     return;
+}
+
+using (var scope = app.Services.CreateScope())
+{
+    var legacyMigrator = scope.ServiceProvider.GetRequiredService<LegacyFieldChatMigrator>();
+    await legacyMigrator.MigrateAsync();
 }
 
 app.Run();

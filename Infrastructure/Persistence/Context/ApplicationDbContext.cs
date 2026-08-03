@@ -61,6 +61,7 @@ namespace GA.Infrastructure.Persistence.Context
         public DbSet<District> Districts { get; set; } = null!;
         public DbSet<AppNotification> AppNotifications { get; set; } = null!;
         public DbSet<UserPushToken> UserPushTokens { get; set; } = null!;
+        public DbSet<UserWebPushSubscription> UserWebPushSubscriptions { get; set; } = null!;
         public DbSet<RefreshToken> RefreshTokens { get; set; } = null!;
 
         // Ofis ↔ saha sohbet
@@ -266,6 +267,15 @@ namespace GA.Infrastructure.Persistence.Context
                 entity.HasIndex(r => new { r.OfficeDirectConversationId, r.UserId })
                     .IsUnique()
                     .HasDatabaseName("IX_OfficeDirectReadStates_Conversation_User");
+            });
+
+            modelBuilder.Entity<UserWebPushSubscription>(entity =>
+            {
+                entity.HasIndex(s => s.Endpoint).IsUnique();
+                entity.HasIndex(s => s.UserId);
+                entity.Property(s => s.Endpoint).HasMaxLength(2048).IsRequired();
+                entity.Property(s => s.P256dh).HasMaxLength(512).IsRequired();
+                entity.Property(s => s.Auth).HasMaxLength(256).IsRequired();
             });
 
             modelBuilder.Entity<RefreshToken>(entity =>

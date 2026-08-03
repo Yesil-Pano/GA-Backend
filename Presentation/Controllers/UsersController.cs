@@ -90,6 +90,7 @@ namespace GA.Presentation.Controllers
 
                 return Ok(new
                 {
+                    id = user.Id,
                     fullName = user.FullName,
                     email = user.Email,
                     companyName,
@@ -106,6 +107,40 @@ namespace GA.Presentation.Controllers
             {
                 return BadRequest(new { Message = "Profil bilgileri alınırken bir hata oluştu: " + ex.Message });
             }
+        }
+
+        /// <summary>
+        /// Oturum açmış kullanıcı kendi şifresini değiştirir.
+        /// POST /api/users/me/change-password
+        /// </summary>
+        [HttpPost("me/change-password")]
+        public async Task<IActionResult> ChangeMyPassword([FromBody] ChangeMyPasswordDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.CurrentPassword) || string.IsNullOrWhiteSpace(dto.NewPassword))
+                return BadRequest(new { message = "Mevcut ve yeni şifre zorunludur." });
+
+            if (dto.NewPassword.Length < 6)
+                return BadRequest(new { message = "Yeni şifre en az 6 karakter olmalıdır." });
+
+            var userId = _currentUserService.UserId;
+            if (userId == Guid.Empty)
+                return Unauthorized(new { message = "Geçersiz oturum." });
+
+            var user = await _context.Users
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted);
+
+            if (user == null)
+                return NotFound(new { message = "Kullanıcı bulunamadı." });
+
+            if (!BCrypt.Net.BCrypt.Verify(dto.CurrentPassword, user.PasswordHash))
+                return BadRequest(new { message = "Mevcut şifre hatalı." });
+
+            user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.NewPassword);
+            user.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Şifreniz güncellendi." });
         }
 
         /// <summary>
@@ -305,5 +340,11 @@ namespace GA.Presentation.Controllers
     public class UpdateUserRolesDto
     {
         public List<string> RoleNames { get; set; } = new();
+    }
+
+    public class ChangeMyPasswordDto
+    {
+        public string CurrentPassword { get; set; } = string.Empty;
+        public string NewPassword { get; set; } = string.Empty;
     }
 }

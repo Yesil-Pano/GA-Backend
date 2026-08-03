@@ -150,7 +150,7 @@ namespace GA.Presentation.Controllers
                 },
                 monthlyActivity = monthlyDays,
                 dailyFaults,
-                generatedAt = TurkeyTime.Format(DateTime.UtcNow),
+                generatedAt = TurkeyTime.FormatApi(DateTime.UtcNow),
             });
         }
 

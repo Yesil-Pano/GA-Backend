@@ -12,6 +12,9 @@ namespace GA.Core.Domain.Entities
         public Guid UserTwoId { get; set; }
         public DateTime? LastMessageAt { get; set; }
 
+        /// <summary>Eski saha↔operasyon Conversation kaydından taşındıysa dolu.</summary>
+        public Guid? MigratedFromConversationId { get; set; }
+
         public Guid TenantId { get; set; }
         public Guid? CustomerId { get; set; }
 

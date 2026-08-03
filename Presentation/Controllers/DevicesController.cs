@@ -1,3 +1,5 @@
+using GA.Application.Features.Notifications;
+using GA.Application.Features.OfficeChat.DTOs;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
@@ -14,11 +16,16 @@ namespace GA.Presentation.Controllers
     {
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
+        private readonly IConfiguration _configuration;
 
-        public DevicesController(ApplicationDbContext context, ICurrentUserService currentUserService)
+        public DevicesController(
+            ApplicationDbContext context,
+            ICurrentUserService currentUserService,
+            IConfiguration configuration)
         {
             _context = context;
             _currentUserService = currentUserService;
+            _configuration = configuration;
         }
 
         public class RegisterPushTokenDto
@@ -93,6 +100,55 @@ namespace GA.Presentation.Controllers
 
             await _context.SaveChangesAsync();
             return Ok(new { message = "Push token kaldırıldı." });
+        }
+
+        [HttpGet("web-push/vapid-public-key")]
+        public IActionResult GetWebPushPublicKey()
+        {
+            var key = WebPushVapidStore.GetPublicKey(_configuration);
+            return Ok(new WebPushVapidPublicKeyResponse { PublicKey = key });
+        }
+
+        [HttpPost("web-push-subscription")]
+        public async Task<IActionResult> RegisterWebPushSubscription(
+            [FromBody] RegisterWebPushSubscriptionRequest dto)
+        {
+            var userId = _currentUserService.UserId;
+            if (userId == Guid.Empty)
+                return Unauthorized(new { message = "Oturum gerekli." });
+
+            var endpoint = (dto.Endpoint ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(endpoint))
+                return BadRequest(new { message = "Geçersiz abonelik." });
+
+            var existing = await _context.UserWebPushSubscriptions
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(s => s.Endpoint == endpoint && !s.IsDeleted);
+
+            if (existing != null)
+            {
+                existing.UserId = userId;
+                existing.P256dh = dto.P256dh;
+                existing.Auth = dto.Auth;
+                existing.IsActive = true;
+                existing.LastSeenAt = DateTime.UtcNow;
+                existing.UpdatedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                _context.UserWebPushSubscriptions.Add(new UserWebPushSubscription
+                {
+                    UserId = userId,
+                    Endpoint = endpoint,
+                    P256dh = dto.P256dh,
+                    Auth = dto.Auth,
+                    IsActive = true,
+                    LastSeenAt = DateTime.UtcNow,
+                });
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "Web push aboneliği kaydedildi." });
         }
     }
 }

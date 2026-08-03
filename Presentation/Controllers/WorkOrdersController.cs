@@ -253,6 +253,42 @@ namespace GA.Presentation.Controllers
 
             var teams = teamRows.Select(t => new { t.id, t.name }).OrderBy(t => t.name).ToList();
 
+            var officeTenantFilter = tenantId;
+            if (isSuperAdmin && partner?.TenantId is Guid pt && pt != Guid.Empty)
+                officeTenantFilter = pt;
+
+            var officeUserQuery = _context.Users
+                .IgnoreQueryFilters()
+                .Where(u => !u.IsDeleted && u.IsActive &&
+                            !_context.FieldWorkerProfiles.Any(f => f.UserId == u.Id && !f.IsDeleted));
+
+            if (isSuperAdmin && (officeTenantFilter == Guid.Empty || partner == null))
+            {
+                // Süper Admin (TÜMÜ): tüm web kullanıcıları
+            }
+            else if (officeTenantFilter != Guid.Empty)
+            {
+                officeUserQuery = officeUserQuery.Where(u => u.TenantId == officeTenantFilter);
+            }
+            else
+            {
+                officeUserQuery = officeUserQuery.Where(u =>
+                    u.TenantId == tenantId ||
+                    (tenantId == _trugoTenantId && u.TenantId == _yesilPanoTenantId));
+            }
+
+            var officeUsers = await officeUserQuery
+                .Select(u => new { id = u.Id, name = u.FullName, tenantId = u.TenantId })
+                .OrderBy(u => u.name)
+                .ToListAsync();
+
+            if (partner != null && isSuperAdmin && partner.TenantId == null)
+            {
+                officeUsers = officeUsers
+                    .Where(u => PartnerCatalog.MatchesTeam(partner, u.tenantId, null))
+                    .ToList();
+            }
+
             var stations = await _context.Stations
                 .IgnoreQueryFilters()
                 .Where(s => !s.IsDeleted &&
@@ -301,6 +337,7 @@ namespace GA.Presentation.Controllers
 
             return Ok(new {
                 teams,
+                officeUsers,
                 stations,
                 projects,
                 types = new[] { "Arıza", "Bakım", "Kurulum", "Keşif", "Saha Operasyonu" },
@@ -1225,6 +1262,13 @@ namespace GA.Presentation.Controllers
 
                 workOrder.StartDate = start;
                 workOrder.EndDate = end;
+
+                if (dto.StartedAt.HasValue)
+                    workOrder.StartedAt = DateTime.SpecifyKind(dto.StartedAt.Value, DateTimeKind.Utc);
+                if (dto.CompletedAt.HasValue)
+                    workOrder.CompletedAt = DateTime.SpecifyKind(dto.CompletedAt.Value, DateTimeKind.Utc);
+                if (dto.CancelledAt.HasValue)
+                    workOrder.CancelledAt = DateTime.SpecifyKind(dto.CancelledAt.Value, DateTimeKind.Utc);
             }
 
             workOrder.Title = dto.Title.Trim();
@@ -1288,6 +1332,9 @@ namespace GA.Presentation.Controllers
                 category = workOrder.WorkCategory,
                 startDate = workOrder.StartDate.ToString("yyyy-MM-dd HH:mm"),
                 endDate = workOrder.EndDate.ToString("yyyy-MM-dd HH:mm"),
+                startedAt = workOrder.StartedAt?.ToString("yyyy-MM-dd HH:mm"),
+                completedAt = workOrder.CompletedAt?.ToString("yyyy-MM-dd HH:mm"),
+                cancelledAt = workOrder.CancelledAt?.ToString("yyyy-MM-dd HH:mm"),
                 position = new[] { workOrder.Location.Y, workOrder.Location.X },
                 operationUserId = workOrder.OperationUserId,
                 operationUserName = operationName,
@@ -1516,6 +1563,9 @@ namespace GA.Presentation.Controllers
         public string RecurrenceInterval { get; set; } = "None";
         public Guid? CityId { get; set; }
         public Guid? DistrictId { get; set; }
+        public DateTime? StartedAt { get; set; }
+        public DateTime? CompletedAt { get; set; }
+        public DateTime? CancelledAt { get; set; }
     }
 
     public class BulkIdsDto

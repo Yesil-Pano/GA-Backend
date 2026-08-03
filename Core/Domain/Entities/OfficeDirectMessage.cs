@@ -14,6 +14,9 @@ namespace GA.Core.Domain.Entities
         /// <summary>İstemci tarafı idempotent gönderim anahtarı (opsiyonel).</summary>
         public string? ClientMessageId { get; set; }
 
+        /// <summary>Eski Conversation/ChatMessage kaydından taşındıysa dolu.</summary>
+        public Guid? LegacyChatMessageId { get; set; }
+
         public Guid TenantId { get; set; }
         public Guid? CustomerId { get; set; }
     }

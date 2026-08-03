@@ -1,8 +1,9 @@
-using System.Net.Http.Json;
-using System.Text.Json.Serialization;
+using System.Text.Json;
 using GA.Infrastructure.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using WebPush;
 
 namespace GA.Application.Features.Notifications
 {
@@ -21,15 +22,18 @@ namespace GA.Application.Features.Notifications
         private static readonly Uri ExpoPushUri = new("https://exp.host/--/api/v2/push/send");
         private readonly ApplicationDbContext _context;
         private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IConfiguration _configuration;
         private readonly ILogger<ExpoPushNotificationService> _logger;
 
         public ExpoPushNotificationService(
             ApplicationDbContext context,
             IHttpClientFactory httpClientFactory,
+            IConfiguration configuration,
             ILogger<ExpoPushNotificationService> logger)
         {
             _context = context;
             _httpClientFactory = httpClientFactory;
+            _configuration = configuration;
             _logger = logger;
         }
 
@@ -42,6 +46,17 @@ namespace GA.Application.Features.Notifications
         {
             if (userId == Guid.Empty) return;
 
+            await SendExpoPushAsync(userId, title, body, data, cancellationToken);
+            await SendWebPushAsync(userId, title, body, data, cancellationToken);
+        }
+
+        private async Task SendExpoPushAsync(
+            Guid userId,
+            string title,
+            string body,
+            IDictionary<string, object>? data,
+            CancellationToken cancellationToken)
+        {
             var tokens = await _context.UserPushTokens
                 .IgnoreQueryFilters()
                 .Where(t => t.UserId == userId && t.IsActive && !t.IsDeleted)
@@ -49,11 +64,7 @@ namespace GA.Application.Features.Notifications
                 .Distinct()
                 .ToListAsync(cancellationToken);
 
-            if (tokens.Count == 0)
-            {
-                _logger.LogInformation("Push atlandı: kullanıcı {UserId} için token yok.", userId);
-                return;
-            }
+            if (tokens.Count == 0) return;
 
             var messages = tokens.Select(token => new ExpoPushMessage
             {
@@ -78,9 +89,6 @@ namespace GA.Application.Features.Notifications
                     return;
                 }
 
-                _logger.LogInformation("Expo push gönderildi. User={UserId}, Count={Count}", userId, tokens.Count);
-
-                // DeviceNotRegistered tokenlarını pasife al
                 if (raw.Contains("DeviceNotRegistered", StringComparison.OrdinalIgnoreCase))
                 {
                     var stale = await _context.UserPushTokens
@@ -102,27 +110,74 @@ namespace GA.Application.Features.Notifications
             }
         }
 
+        private async Task SendWebPushAsync(
+            Guid userId,
+            string title,
+            string body,
+            IDictionary<string, object>? data,
+            CancellationToken cancellationToken)
+        {
+            var vapid = WebPushVapidStore.GetOrCreate(_configuration);
+
+            var subs = await _context.UserWebPushSubscriptions
+                .IgnoreQueryFilters()
+                .Where(s => s.UserId == userId && s.IsActive && !s.IsDeleted)
+                .ToListAsync(cancellationToken);
+
+            if (subs.Count == 0) return;
+
+            var payload = JsonSerializer.Serialize(new
+            {
+                title,
+                body,
+                data = data ?? new Dictionary<string, object>(),
+            });
+
+            var client = new WebPushClient();
+
+            foreach (var sub in subs)
+            {
+                try
+                {
+                    var pushSub = new PushSubscription(sub.Endpoint, sub.P256dh, sub.Auth);
+                    await client.SendNotificationAsync(pushSub, payload, vapid, cancellationToken);
+                }
+                catch (WebPushException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Gone ||
+                                                  ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    sub.IsActive = false;
+                    sub.UpdatedAt = DateTime.UtcNow;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Web push gönderilemedi. User={UserId}", userId);
+                }
+            }
+
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+
         private sealed class ExpoPushMessage
         {
-            [JsonPropertyName("to")]
+            [System.Text.Json.Serialization.JsonPropertyName("to")]
             public string To { get; set; } = string.Empty;
 
-            [JsonPropertyName("title")]
+            [System.Text.Json.Serialization.JsonPropertyName("title")]
             public string Title { get; set; } = string.Empty;
 
-            [JsonPropertyName("body")]
+            [System.Text.Json.Serialization.JsonPropertyName("body")]
             public string Body { get; set; } = string.Empty;
 
-            [JsonPropertyName("sound")]
+            [System.Text.Json.Serialization.JsonPropertyName("sound")]
             public string Sound { get; set; } = "default";
 
-            [JsonPropertyName("priority")]
+            [System.Text.Json.Serialization.JsonPropertyName("priority")]
             public string Priority { get; set; } = "high";
 
-            [JsonPropertyName("channelId")]
+            [System.Text.Json.Serialization.JsonPropertyName("channelId")]
             public string? ChannelId { get; set; }
 
-            [JsonPropertyName("data")]
+            [System.Text.Json.Serialization.JsonPropertyName("data")]
             public IDictionary<string, object>? Data { get; set; }
         }
     }

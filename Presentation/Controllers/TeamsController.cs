@@ -194,7 +194,7 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> CreateTeam([FromBody] CreateTeamDto dto)
+        public async Task<IActionResult> CreateTeam([FromBody] CreateTeamDto dto, [FromQuery] string? partnerKey)
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
@@ -240,15 +240,14 @@ namespace GA.Presentation.Controllers
 
             if (dto.ProjectIds != null && dto.ProjectIds.Any())
             {
-                var selectedProjects = await _context.Projects
-                    .IgnoreQueryFilters()
-                    .Where(p => !p.IsDeleted
-                                && p.TenantId == targetTenantId
-                                && dto.ProjectIds.Contains(p.Id))
-                    .ToListAsync();
+                var (selectedProjects, allValid) = await ResolveAssignableProjectsAsync(
+                    dto.ProjectIds,
+                    isSuperAdmin,
+                    isSuperAdmin ? dto.TenantId : null,
+                    partnerKey);
 
-                if (selectedProjects.Count != dto.ProjectIds.Distinct().Count())
-                    return BadRequest(new { Message = "Seçilen projelerden biri veya birkaçı hedef firmaya ait değil veya bulunamadı." });
+                if (!allValid)
+                    return BadRequest(new { Message = "Seçilen projelerden biri veya birkaçı bulunamadı veya atama yetkiniz dışında." });
 
                 foreach (var project in selectedProjects)
                     profile.Projects.Add(project);
@@ -263,7 +262,7 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateTeam(Guid id, [FromBody] UpdateTeamDto dto)
+        public async Task<IActionResult> UpdateTeam(Guid id, [FromBody] UpdateTeamDto dto, [FromQuery] string? partnerKey)
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
@@ -310,15 +309,14 @@ namespace GA.Presentation.Controllers
                 user.FieldWorkerProfile.Projects.Clear();
                 if (dto.ProjectIds != null && dto.ProjectIds.Any())
                 {
-                    var selectedProjects = await _context.Projects
-                        .IgnoreQueryFilters()
-                        .Where(p => !p.IsDeleted
-                                    && p.TenantId == user.TenantId
-                                    && dto.ProjectIds.Contains(p.Id))
-                        .ToListAsync();
+                    var (selectedProjects, allValid) = await ResolveAssignableProjectsAsync(
+                        dto.ProjectIds,
+                        isSuperAdmin,
+                        tenantIdFilter: null,
+                        partnerKey);
 
-                    if (selectedProjects.Count != dto.ProjectIds.Distinct().Count())
-                        return BadRequest(new { Message = "Seçilen projelerden biri veya birkaçı bu personele ait firmada bulunamadı." });
+                    if (!allValid)
+                        return BadRequest(new { Message = "Seçilen projelerden biri veya birkaçı bulunamadı veya atama yetkiniz dışında." });
 
                     foreach (var project in selectedProjects)
                         user.FieldWorkerProfile.Projects.Add(project);
@@ -729,6 +727,53 @@ namespace GA.Presentation.Controllers
             ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             _ => "application/octet-stream",
         };
+
+        /// <summary>
+        /// Adminin lookups ekranında gördüğü projelerle aynı kapsam — çoklu proje ataması.
+        /// </summary>
+        private async Task<(List<Project> projects, bool allValid)> ResolveAssignableProjectsAsync(
+            IEnumerable<Guid> projectIds,
+            bool isSuperAdmin,
+            Guid? tenantIdFilter,
+            string? partnerKey)
+        {
+            var distinctIds = projectIds.Distinct().ToList();
+            if (distinctIds.Count == 0)
+                return (new List<Project>(), true);
+
+            var adminTenantId = _currentUserService.TenantId;
+
+            var query = _context.Projects
+                .IgnoreQueryFilters()
+                .Where(p => !p.IsDeleted && distinctIds.Contains(p.Id));
+
+            if (isSuperAdmin)
+            {
+                if (tenantIdFilter.HasValue && tenantIdFilter.Value != Guid.Empty)
+                    query = query.Where(p => p.TenantId == tenantIdFilter.Value);
+            }
+            else
+            {
+                query = query.Where(p =>
+                    p.TenantId == adminTenantId ||
+                    (adminTenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId));
+            }
+
+            var projects = await query.ToListAsync();
+
+            if (isSuperAdmin && (!tenantIdFilter.HasValue || tenantIdFilter.Value == Guid.Empty))
+            {
+                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                if (partner != null)
+                {
+                    projects = projects
+                        .Where(p => PartnerCatalog.Matches(partner, p.TenantId, null, p.Name))
+                        .ToList();
+                }
+            }
+
+            return (projects, projects.Count == distinctIds.Count);
+        }
 
         private async Task<FieldWorkerProfile?> FindAccessibleProfileAsync(Guid userId)
         {

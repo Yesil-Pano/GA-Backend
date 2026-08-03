@@ -26,7 +26,11 @@ namespace GA.Application.Features.Common
             }
         }
 
-        public static string Format(DateTime? utc, string format = "yyyy-MM-dd HH:mm")
+        public const string DateTimeDisplayFormat = "dd.MM.yyyy HH:mm";
+        public const string DateDisplayFormat = "dd.MM.yyyy";
+        public const string ApiDateTimeFormat = "yyyy-MM-dd HH:mm";
+
+        public static string Format(DateTime? utc, string format = DateTimeDisplayFormat)
         {
             if (!utc.HasValue) return string.Empty;
             var dto = utc.Value.Kind switch
@@ -36,8 +40,12 @@ namespace GA.Application.Features.Common
                 _ => DateTime.SpecifyKind(utc.Value, DateTimeKind.Utc),
             };
             var local = TimeZoneInfo.ConvertTimeFromUtc(dto, Istanbul);
-            return local.ToString(format, CultureInfo.InvariantCulture);
+            return local.ToString(format, CultureInfo.GetCultureInfo("tr-TR"));
         }
+
+        public static string FormatDate(DateTime? utc) => Format(utc, DateDisplayFormat);
+
+        public static string FormatApi(DateTime? utc) => Format(utc, ApiDateTimeFormat);
 
         public static int? DurationMinutes(DateTime? startedAtUtc, DateTime? completedAtUtc)
         {

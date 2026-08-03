@@ -1,7 +1,11 @@
+using GA.Application.Features.Notifications;
 using GA.Application.Features.OfficeChat;
 using GA.Application.Features.OfficeChat.DTOs;
+using GA.Core.Interfaces;
+using GA.Infrastructure.Hubs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 
 namespace GA.Presentation.Controllers
 {
@@ -11,19 +15,69 @@ namespace GA.Presentation.Controllers
     public class OfficeChatController : ControllerBase
     {
         private readonly IOfficeChatService _officeChatService;
+        private readonly IHubContext<ChatHub> _hub;
+        private readonly IPushNotificationService _pushNotificationService;
+        private readonly ICurrentUserService _currentUserService;
 
-        public OfficeChatController(IOfficeChatService officeChatService)
+        public OfficeChatController(
+            IOfficeChatService officeChatService,
+            IHubContext<ChatHub> hub,
+            IPushNotificationService pushNotificationService,
+            ICurrentUserService currentUserService)
         {
             _officeChatService = officeChatService;
+            _hub = hub;
+            _pushNotificationService = pushNotificationService;
+            _currentUserService = currentUserService;
         }
 
-        [HttpGet("conversations")]
-        public async Task<IActionResult> ListConversations(CancellationToken ct = default)
+        [HttpGet("contacts")]
+        public async Task<IActionResult> ListContacts(
+            [FromQuery] string? partnerKey,
+            CancellationToken ct = default)
         {
             try
             {
-                var data = await _officeChatService.ListConversationsAsync(ct);
+                var data = await _officeChatService.ListContactsAsync(partnerKey, ct);
                 return Ok(data);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
+        [HttpGet("conversations")]
+        public async Task<IActionResult> ListConversations(
+            [FromQuery] string? partnerKey,
+            CancellationToken ct = default)
+        {
+            try
+            {
+                var data = await _officeChatService.ListContactsAsync(partnerKey, ct);
+                return Ok(data);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
+        [HttpGet("unread-count")]
+        public async Task<IActionResult> UnreadCount(CancellationToken ct = default)
+        {
+            try
+            {
+                var count = await _officeChatService.GetUnreadTotalAsync(ct);
+                return Ok(new { count });
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -97,8 +151,54 @@ namespace GA.Presentation.Controllers
         {
             try
             {
-                var data = await _officeChatService.SendMessageAsync(id, request, ct);
-                return Ok(data);
+                var (senderDto, recipientDto, recipientUserId) = await _officeChatService.SendMessageAsync(id, request, ct);
+
+                var preview = senderDto.Body.Length > 80 ? senderDto.Body[..80] + "…" : senderDto.Body;
+                var senderUserId = _currentUserService.UserId;
+
+                await _hub.Clients.Group($"user-{senderUserId}")
+                    .SendAsync("DirectMessageCreated", senderDto, ct);
+                if (recipientUserId != Guid.Empty && recipientUserId != senderUserId)
+                {
+                    await _hub.Clients.Group($"user-{recipientUserId}")
+                        .SendAsync("DirectMessageCreated", recipientDto, ct);
+                }
+
+                await _hub.Clients.Group($"user-{recipientUserId}")
+                    .SendAsync("DirectConversationUpdated", new
+                    {
+                        conversationId = senderDto.ConversationId,
+                        lastMessageAt = senderDto.SentAt,
+                        lastMessagePreview = preview,
+                        otherUserId = senderUserId,
+                    }, ct);
+                await _hub.Clients.Group($"user-{senderUserId}")
+                    .SendAsync("DirectConversationUpdated", new
+                    {
+                        conversationId = senderDto.ConversationId,
+                        lastMessageAt = senderDto.SentAt,
+                        lastMessagePreview = preview,
+                        otherUserId = recipientUserId,
+                    }, ct);
+
+                if (recipientUserId != Guid.Empty &&
+                    recipientUserId != senderUserId)
+                {
+                    var pushBody = senderDto.Body.Length > 120 ? senderDto.Body[..120] + "…" : senderDto.Body;
+                    await _pushNotificationService.SendToUserAsync(
+                        recipientUserId,
+                        senderDto.SenderName,
+                        pushBody,
+                        new Dictionary<string, object>
+                        {
+                            ["type"] = "DirectChatMessage",
+                            ["conversationId"] = senderDto.ConversationId.ToString(),
+                            ["senderUserId"] = senderDto.SenderUserId.ToString(),
+                        },
+                        ct);
+                }
+
+                return Ok(senderDto);
             }
             catch (KeyNotFoundException ex)
             {
@@ -123,7 +223,9 @@ namespace GA.Presentation.Controllers
         {
             try
             {
-                await _officeChatService.MarkReadAsync(id, ct);
+                var (conversationId, userId, lastReadAt) = await _officeChatService.MarkReadAsync(id, ct);
+                await _hub.Clients.Group($"conversation-{conversationId}")
+                    .SendAsync("DirectMessagesRead", new { conversationId, userId, lastReadAt }, ct);
                 return Ok(new { message = "Okundu." });
             }
             catch (KeyNotFoundException ex)
