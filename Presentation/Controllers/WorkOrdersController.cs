@@ -105,7 +105,6 @@ namespace GA.Presentation.Controllers
                 .Where(w => !w.IsDeleted &&
                             (isSuperAdmin ||
                              w.TenantId == tenantId ||
-                             (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
                              (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
 
             // Mobil saha ekranı: yalnızca oturum açan kullanıcıya atanmış iş emirleri (Super Admin dahil)
@@ -230,8 +229,7 @@ namespace GA.Presentation.Controllers
                     .ThenInclude(f => f!.Projects)
                 .Where(u => !u.IsDeleted && u.FieldWorkerProfile != null &&
                             (isSuperAdmin ||
-                             u.TenantId == tenantId ||
-                             (tenantId == _trugoTenantId && u.TenantId == _yesilPanoTenantId)))
+                             u.TenantId == tenantId))
                 .Select(u => new {
                     id = u.Id,
                     name = u.FullName,
@@ -272,9 +270,7 @@ namespace GA.Presentation.Controllers
             }
             else
             {
-                officeUserQuery = officeUserQuery.Where(u =>
-                    u.TenantId == tenantId ||
-                    (tenantId == _trugoTenantId && u.TenantId == _yesilPanoTenantId));
+                officeUserQuery = officeUserQuery.Where(u => u.TenantId == tenantId);
             }
 
             var officeUsers = await officeUserQuery
@@ -293,8 +289,7 @@ namespace GA.Presentation.Controllers
                 .IgnoreQueryFilters()
                 .Where(s => !s.IsDeleted &&
                             (isSuperAdmin ||
-                             s.TenantId == tenantId ||
-                             (tenantId == _trugoTenantId && s.TenantId == _yesilPanoTenantId)))
+                             s.TenantId == tenantId))
                 .Select(s => new {
                     id = s.Id,
                     name = s.Name,
@@ -322,8 +317,7 @@ namespace GA.Presentation.Controllers
                 .IgnoreQueryFilters()
                 .Where(p => !p.IsDeleted &&
                             (isSuperAdmin ||
-                             p.TenantId == tenantId ||
-                             (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId)))
+                             p.TenantId == tenantId))
                 .Select(p => new { id = p.Id, name = p.Name, tenantId = p.TenantId })
                 .OrderBy(p => p.name)
                 .ToListAsync();
@@ -508,9 +502,10 @@ namespace GA.Presentation.Controllers
             var userId = _currentUserService.UserId;
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
+            var isOperationReporter = await _userAccessService.IsOperationReporterOnlyAsync();
 
-            if (await _userAccessService.IsOperationReporterOnlyAsync())
-                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Operasyoncu rolü toplu iş emri oluşturamaz." });
+            if (isOperationReporter && dto.AssignedToUserId.HasValue && dto.AssignedToUserId != Guid.Empty)
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Operasyoncu rolü iş emri ataması yapamaz." });
 
             if (!isSuperAdmin && !string.IsNullOrWhiteSpace(dto.MobileDescription))
                 dto.MobileDescription = string.Empty;
@@ -532,11 +527,11 @@ namespace GA.Presentation.Controllers
                 .Where(s => dto.StationIds.Contains(s.Id) && !s.IsDeleted)
                 .ToListAsync();
 
-            if (stations.Count == 0)
-                return BadRequest(new { message = "Seçilen noktalar bulunamadı." });
-
             if (!isSuperAdmin)
                 stations = stations.Where(s => s.TenantId == tenantId).ToList();
+
+            if (stations.Count == 0)
+                return BadRequest(new { message = "Seçilen noktalar bulunamadı." });
 
             var createdIds = new List<Guid>();
             foreach (var station in stations)
@@ -1242,7 +1237,6 @@ namespace GA.Presentation.Controllers
                 .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted &&
                                           (isSuperAdmin ||
                                            w.TenantId == tenantId ||
-                                           (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
                                            (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
 
             if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
@@ -1384,7 +1378,6 @@ namespace GA.Presentation.Controllers
                 .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted &&
                     (isSuperAdmin ||
                      w.TenantId == tenantId ||
-                     (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
                      (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId) ||
                      (userId != Guid.Empty && w.AssignedToUserId == userId)));
         }

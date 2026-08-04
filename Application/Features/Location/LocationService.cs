@@ -44,7 +44,6 @@ namespace GA.Application.Features.Location
                          && u.Location != null
                          && (isSuperAdmin
                              || u.TenantId == tenantId
-                             || (tenantId == trugoTenantId && u.TenantId == yesilPanoTenantId)
                              || (tenantId == yesilPanoTenantId && u.TenantId == trugoTenantId)))
                 .Select(u => new TeamMemberLocationDto
                 {

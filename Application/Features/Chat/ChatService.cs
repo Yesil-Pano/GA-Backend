@@ -78,7 +78,6 @@ namespace GA.Application.Features.Chat
                 .Where(u => !u.IsDeleted &&
                             (isSuperAdmin ||
                              u.TenantId == tenantId ||
-                             (tenantId == TrugoTenantId && u.TenantId == YesilPanoTenantId) ||
                              (tenantId == YesilPanoTenantId && u.TenantId == TrugoTenantId)) &&
                             ((u.FieldWorkerProfile != null && !u.FieldWorkerProfile.IsDeleted) ||
                              _context.Conversations.Any(c =>
@@ -321,7 +320,6 @@ namespace GA.Application.Features.Chat
             var tenantId = _currentUser.TenantId;
             if (tenantId == Guid.Empty) return true;
             if (conversationTenantId == tenantId) return true;
-            if (tenantId == TrugoTenantId && conversationTenantId == YesilPanoTenantId) return true;
             if (tenantId == YesilPanoTenantId && conversationTenantId == TrugoTenantId) return true;
             return false;
         }

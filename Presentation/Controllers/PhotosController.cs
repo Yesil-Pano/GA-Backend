@@ -1,4 +1,5 @@
 using GA.Application.Features.Auth;
+using GA.Application.Features.Photos;
 using GA.Application.Features.Photos.DTOs;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
@@ -21,8 +22,8 @@ namespace GA.Presentation.Controllers
         private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
         private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
 
-        // Maksimum fotoğraf boyutu: 10 MB
-        private const long MaxFileSizeBytes = 10 * 1024 * 1024;
+        // Maksimum boyut: görsel 10 MB, video 30 MB (OpeningAttachmentRules)
+        private const long LegacyMaxFileSizeBytes = 10 * 1024 * 1024;
 
         public PhotosController(
             ApplicationDbContext context,
@@ -43,6 +44,11 @@ namespace GA.Presentation.Controllers
         {
             var tenantId = _currentUserService.TenantId;
             var userId   = _currentUserService.UserId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+            var isOpeningAttachment = OpeningAttachmentRules.IsOpeningCategory(request.Description);
+
+            if (isOpeningAttachment && !OpeningAttachmentRules.IsAllowedContentType(request.ContentType))
+                return BadRequest(new { message = "Açılış ekleri için yalnızca JPEG, PNG, WebP, MP4, MOV veya WebM yüklenebilir." });
 
             byte[] data;
             try
@@ -59,8 +65,46 @@ namespace GA.Presentation.Controllers
                 return BadRequest(new { message = "Geçersiz Base64 verisi." });
             }
 
-            if (data.Length > MaxFileSizeBytes)
-                return BadRequest(new { message = $"Dosya boyutu 10 MB'ı aşamaz. (Gönderilen: {data.Length / 1024 / 1024} MB)" });
+            var maxBytes = isOpeningAttachment
+                ? OpeningAttachmentRules.MaxBytesForContentType(request.ContentType)
+                : LegacyMaxFileSizeBytes;
+
+            if (data.Length > maxBytes)
+            {
+                var maxMb = maxBytes / 1024 / 1024;
+                return BadRequest(new { message = $"Dosya boyutu {maxMb} MB'ı aşamaz. (Gönderilen: {data.Length / 1024 / 1024} MB)" });
+            }
+
+            Guid photoTenantId = tenantId;
+            if (string.Equals(request.EntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase))
+            {
+                var workOrder = await _context.WorkOrders
+                    .IgnoreQueryFilters()
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(w => w.Id == request.EntityId && !w.IsDeleted);
+
+                if (workOrder == null)
+                    return BadRequest(new { message = "İş emri bulunamadı." });
+
+                if (!isSuperAdmin && !CanUploadToWorkOrder(workOrder, tenantId, userId))
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "Bu iş emrine dosya yükleme yetkiniz yok." });
+
+                photoTenantId = workOrder.TenantId;
+
+                if (isOpeningAttachment)
+                {
+                    var existingCount = await _context.Photos
+                        .IgnoreQueryFilters()
+                        .CountAsync(p => !p.IsDeleted
+                                         && p.EntityType == "WorkOrder"
+                                         && p.EntityId == request.EntityId
+                                         && p.Description != null
+                                         && p.Description.ToUpper() == OpeningAttachmentRules.Category);
+
+                    if (existingCount >= OpeningAttachmentRules.MaxPerWorkOrder)
+                        return BadRequest(new { message = $"En fazla {OpeningAttachmentRules.MaxPerWorkOrder} açılış eki yüklenebilir." });
+                }
+            }
 
             var photo = new Photo
             {
@@ -72,7 +116,7 @@ namespace GA.Presentation.Controllers
                 EntityType  = request.EntityType,
                 EntityId    = request.EntityId,
                 UserId      = userId,
-                TenantId    = tenantId,
+                TenantId    = photoTenantId != Guid.Empty ? photoTenantId : tenantId,
                 CustomerId  = _currentUserService.CustomerId,
             };
 
@@ -111,7 +155,6 @@ namespace GA.Presentation.Controllers
                              && !p.IsDeleted
                              && (isSuperAdmin ||
                                   p.TenantId == tenantId ||
-                                  (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId) ||
                                   (tenantId == _yesilPanoTenantId && p.TenantId == _trugoTenantId))));
 
             var photos = await filtered
@@ -150,7 +193,6 @@ namespace GA.Presentation.Controllers
                              && !p.IsDeleted
                              && (isSuperAdmin ||
                                   p.TenantId == tenantId ||
-                                  (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId) ||
                                   (tenantId == _yesilPanoTenantId && p.TenantId == _trugoTenantId))));
 
             var photo = await filtered
@@ -180,6 +222,9 @@ namespace GA.Presentation.Controllers
 
             if (photo == null) return NotFound();
 
+            if (OpeningAttachmentRules.IsOpeningCategory(photo.Description))
+                return BadRequest(new { message = "Açılış ekleri silinemez." });
+
             photo.IsDeleted = true;
             photo.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
@@ -198,9 +243,12 @@ namespace GA.Presentation.Controllers
             if (canViewIsg && canViewOperasyon)
                 return query;
 
+            var acilis = OpeningAttachmentRules.Category;
+
             if (canViewIsg && !canViewOperasyon)
             {
                 return query.Where(p =>
+                    (p.Description != null && p.Description.ToUpper() == acilis) ||
                     p.Description == null ||
                     p.Description.ToUpper() == "ISG" ||
                     p.Description.ToUpper() == "DIGER");
@@ -209,11 +257,30 @@ namespace GA.Presentation.Controllers
             if (!canViewIsg && canViewOperasyon)
             {
                 return query.Where(p =>
+                    (p.Description != null && p.Description.ToUpper() == acilis) ||
                     p.Description == null ||
                     p.Description.ToUpper() != "ISG");
             }
 
-            return query.Where(_ => false);
+            return query.Where(p => p.Description != null && p.Description.ToUpper() == acilis);
+        }
+
+        /// <summary>
+        /// İş emri listesi/görüntüleme ile uyumlu yükleme yetkisi.
+        /// Atanan saha personeli ve YP→TRUGO erişimi dahil.
+        /// </summary>
+        private bool CanUploadToWorkOrder(WorkOrder workOrder, Guid tenantId, Guid userId)
+        {
+            if (workOrder.TenantId == tenantId)
+                return true;
+
+            if (workOrder.AssignedToUserId == userId)
+                return true;
+
+            if (tenantId == _yesilPanoTenantId && workOrder.TenantId == _trugoTenantId)
+                return true;
+
+            return false;
         }
     }
 }

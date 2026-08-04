@@ -35,9 +35,6 @@ namespace GA.Presentation.Controllers
         private readonly ICurrentUserService _currentUserService;
         private readonly IUserAccessService _userAccessService;
 
-        private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
-        private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
-
         public TeamsController(
             ApplicationDbContext context,
             ICurrentUserService currentUserService,
@@ -60,8 +57,7 @@ namespace GA.Presentation.Controllers
                     .ThenInclude(f => f!.Projects)
                 .Where(u => !u.IsDeleted && u.FieldWorkerProfile != null &&
                             (isSuperAdmin ||
-                             u.TenantId == tenantId ||
-                             (tenantId == _trugoTenantId && u.TenantId == _yesilPanoTenantId)))
+                             u.TenantId == tenantId))
                 .Select(u => new {
                     id = u.Id,
                     name = u.FullName,
@@ -156,8 +152,7 @@ namespace GA.Presentation.Controllers
                 .IgnoreQueryFilters()
                 .Where(p => !p.IsDeleted &&
                             (isSuperAdmin ||
-                             p.TenantId == tenantId ||
-                             (tenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId)));
+                             p.TenantId == tenantId));
 
             if (isSuperAdmin && tenantIdFilter.HasValue && tenantIdFilter.Value != Guid.Empty)
             {
@@ -273,8 +268,7 @@ namespace GA.Presentation.Controllers
                     .ThenInclude(f => f!.Projects)
                 .FirstOrDefaultAsync(u => u.Id == id && !u.IsDeleted &&
                                           (isSuperAdmin ||
-                                           u.TenantId == tenantId ||
-                                           (tenantId == _trugoTenantId && u.TenantId == _yesilPanoTenantId)));
+                                           u.TenantId == tenantId));
 
             if (user == null)
                 return NotFound(new { Message = "Güncellenmek istenen ekip üyesi bulunamadı veya yetkiniz yetersiz." });
@@ -348,8 +342,7 @@ namespace GA.Presentation.Controllers
                 .Include(u => u.FieldWorkerProfile)
                 .FirstOrDefaultAsync(u => u.Id == id && !u.IsDeleted &&
                                           (isSuperAdmin ||
-                                           u.TenantId == tenantId ||
-                                           (tenantId == _trugoTenantId && u.TenantId == _yesilPanoTenantId)));
+                                           u.TenantId == tenantId));
 
             if (user == null)
                 return NotFound(new { Message = "Silinecek ekip bulunamadı veya yetkiniz yetersiz." });
@@ -402,8 +395,7 @@ namespace GA.Presentation.Controllers
                 .IgnoreQueryFilters()
                 .Include(p => p.User)
                 .FirstOrDefaultAsync(p => p.UserId == dto.TeamUserId &&
-                                          (p.User.TenantId == tenantId ||
-                                           (tenantId == _trugoTenantId && p.User.TenantId == _yesilPanoTenantId)));
+                                          p.User.TenantId == tenantId);
 
             if (profile == null) return NotFound(new { message = "Saha personeli profili bulunamadı." });
 
@@ -754,9 +746,7 @@ namespace GA.Presentation.Controllers
             }
             else
             {
-                query = query.Where(p =>
-                    p.TenantId == adminTenantId ||
-                    (adminTenantId == _trugoTenantId && p.TenantId == _yesilPanoTenantId));
+                query = query.Where(p => p.TenantId == adminTenantId);
             }
 
             var projects = await query.ToListAsync();
@@ -789,8 +779,7 @@ namespace GA.Presentation.Controllers
                     p.User != null &&
                     !p.User.IsDeleted &&
                     (isSuperAdmin ||
-                     p.User.TenantId == tenantId ||
-                     (tenantId == _trugoTenantId && p.User.TenantId == _yesilPanoTenantId)));
+                     p.User.TenantId == tenantId));
         }
     }
 

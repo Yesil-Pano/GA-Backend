@@ -278,7 +278,6 @@ namespace GA.Presentation.Controllers
                 .Where(w => !w.IsDeleted &&
                             (isSuperAdmin ||
                              w.TenantId == tenantId ||
-                             (tenantId == _trugoTenantId && w.TenantId == _yesilPanoTenantId) ||
                              (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId)));
 
             if (isSuperAdmin)
