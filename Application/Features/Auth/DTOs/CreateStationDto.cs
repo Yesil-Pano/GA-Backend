@@ -13,6 +13,8 @@
         public string City { get; set; } = "Ankara";
         public double Latitude { get; set; }
         public double Longitude { get; set; }
+        /// <summary>Super Admin için zorunlu; firma kullanıcılarında yok sayılır.</summary>
+        public Guid? TenantId { get; set; }
 
         // Dosya Yolları (İleride FileService ile diske/S3'e yazılıp adresi buraya setlenecek)
         public string? GeneralFilePath { get; set; }

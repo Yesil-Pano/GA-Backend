@@ -29,15 +29,18 @@ namespace GA.Application.Features.OfficeChat
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUser;
         private readonly IUserAccessService _userAccess;
+        private readonly IPartnerTenantService _partnerTenantService;
 
         public OfficeChatService(
             ApplicationDbContext context,
             ICurrentUserService currentUser,
-            IUserAccessService userAccess)
+            IUserAccessService userAccess,
+            IPartnerTenantService partnerTenantService)
         {
             _context = context;
             _currentUser = currentUser;
             _userAccess = userAccess;
+            _partnerTenantService = partnerTenantService;
         }
 
         public async Task<List<OfficeDirectConversationDto>> ListConversationsAsync(CancellationToken ct = default)
@@ -51,7 +54,7 @@ namespace GA.Application.Features.OfficeChat
             await EnsureChatAccessAsync(ct);
             var me = _currentUser.UserId;
             var meIsGa = await _userAccess.IsSuperAdminAsync(ct);
-            var partnerFilter = meIsGa ? PartnerCatalog.ResolveFilter(partnerKey) : null;
+            var partnerFilter = meIsGa ? await _partnerTenantService.ResolveFilterAsync(partnerKey, ct) : null;
 
             var contacts = await LoadEligibleContactsAsync(me, meIsGa, partnerFilter, ct);
             var contactIds = contacts.Select(c => c.UserId).ToList();

@@ -160,6 +160,15 @@ namespace GA.Infrastructure.Persistence.Context
                 entity.HasIndex(c => c.Name).IsUnique().HasDatabaseName("IX_Cities_Name");
             });
 
+            modelBuilder.Entity<Tenant>(entity =>
+            {
+                entity.Property(t => t.PartnerKey).HasMaxLength(64);
+                entity.HasIndex(t => t.PartnerKey)
+                    .IsUnique()
+                    .HasFilter("\"PartnerKey\" IS NOT NULL")
+                    .HasDatabaseName("IX_Tenants_PartnerKey");
+            });
+
             modelBuilder.Entity<District>(entity =>
             {
                 entity.ToTable("Districts");

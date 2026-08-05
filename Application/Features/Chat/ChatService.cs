@@ -28,15 +28,18 @@ namespace GA.Application.Features.Chat
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUser;
         private readonly IUserAccessService _userAccess;
+        private readonly IPartnerTenantService _partnerTenantService;
 
         public ChatService(
             ApplicationDbContext context,
             ICurrentUserService currentUser,
-            IUserAccessService userAccess)
+            IUserAccessService userAccess,
+            IPartnerTenantService partnerTenantService)
         {
             _context = context;
             _currentUser = currentUser;
             _userAccess = userAccess;
+            _partnerTenantService = partnerTenantService;
         }
 
         public async Task<MyConversationResponse> GetMyConversationAsync(int take, CancellationToken ct = default)
@@ -102,7 +105,7 @@ namespace GA.Application.Features.Chat
 
             if (isSuperAdmin)
             {
-                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                var partner = await _partnerTenantService.ResolveFilterAsync(partnerKey, ct);
                 if (partner != null)
                 {
                     workers = workers

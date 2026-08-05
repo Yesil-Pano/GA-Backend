@@ -15,14 +15,19 @@ namespace GA.Presentation.Controllers
     {
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
+        private readonly IPartnerTenantService _partnerTenantService;
 
         private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
         private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
 
-        public DashboardController(ApplicationDbContext context, ICurrentUserService currentUserService)
+        public DashboardController(
+            ApplicationDbContext context,
+            ICurrentUserService currentUserService,
+            IPartnerTenantService partnerTenantService)
         {
             _context = context;
             _currentUserService = currentUserService;
+            _partnerTenantService = partnerTenantService;
         }
 
         /// <summary>GET /api/dashboard/summary</summary>
@@ -42,7 +47,7 @@ namespace GA.Presentation.Controllers
 
             if (isSuperAdmin)
             {
-                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                var partner = await _partnerTenantService.ResolveFilterAsync(partnerKey);
                 if (partner != null)
                 {
                     var stationRows = await _context.Stations

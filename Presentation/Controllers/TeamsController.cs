@@ -34,15 +34,18 @@ namespace GA.Presentation.Controllers
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
         private readonly IUserAccessService _userAccessService;
+        private readonly IPartnerTenantService _partnerTenantService;
 
         public TeamsController(
             ApplicationDbContext context,
             ICurrentUserService currentUserService,
-            IUserAccessService userAccessService)
+            IUserAccessService userAccessService,
+            IPartnerTenantService partnerTenantService)
         {
             _context = context;
             _currentUserService = currentUserService;
             _userAccessService = userAccessService;
+            _partnerTenantService = partnerTenantService;
         }
 
         [HttpGet]
@@ -105,7 +108,7 @@ namespace GA.Presentation.Controllers
 
             if (isSuperAdmin)
             {
-                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                var partner = await _partnerTenantService.ResolveFilterAsync(partnerKey);
                 if (partner != null)
                 {
                     teams = teams
@@ -166,7 +169,7 @@ namespace GA.Presentation.Controllers
 
             if (isSuperAdmin && (!tenantIdFilter.HasValue || tenantIdFilter.Value == Guid.Empty))
             {
-                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                var partner = await _partnerTenantService.ResolveFilterAsync(partnerKey);
                 if (partner != null)
                 {
                     projects = projects
@@ -753,7 +756,7 @@ namespace GA.Presentation.Controllers
 
             if (isSuperAdmin && (!tenantIdFilter.HasValue || tenantIdFilter.Value == Guid.Empty))
             {
-                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                var partner = await _partnerTenantService.ResolveFilterAsync(partnerKey);
                 if (partner != null)
                 {
                     projects = projects

@@ -15,6 +15,9 @@ namespace GA.Core.Domain.Entities
         /// <summary>Demo bitiş (UTC). IsDemo=false iken null.</summary>
         public DateTime? DemoExpiresAt { get; set; }
 
+        /// <summary>Web firma seçici anahtarı (trugo, tesla, …). Benzersiz.</summary>
+        public string? PartnerKey { get; set; }
+
         public virtual ICollection<Customer> Customers { get; set; } = new List<Customer>();
         public virtual ICollection<User> Users { get; set; } = new List<User>();
     }

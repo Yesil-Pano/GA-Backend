@@ -1,4 +1,5 @@
-﻿using GA.Application.Features.Auth.DTOs;
+﻿using GA.Application.Features.Auth;
+using GA.Application.Features.Auth.DTOs;
 using GA.Application.Features.Geo;
 using GA.Application.Features.Partners;
 using GA.Core.Domain.Constants;
@@ -19,15 +20,19 @@ namespace GA.Presentation.Controllers
     {
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUserService;
+        private readonly IUserAccessService _userAccessService;
+        private readonly IPartnerTenantService _partnerTenantService;
 
-        // 🚀 B2B FİRMA KİMLİKLERİ
-        private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
-        private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
-
-        public StationsController(ApplicationDbContext context, ICurrentUserService currentUserService)
+        public StationsController(
+            ApplicationDbContext context,
+            ICurrentUserService currentUserService,
+            IUserAccessService userAccessService,
+            IPartnerTenantService partnerTenantService)
         {
             _context = context;
             _currentUserService = currentUserService;
+            _userAccessService = userAccessService;
+            _partnerTenantService = partnerTenantService;
         }
 
         [HttpGet]
@@ -70,7 +75,7 @@ namespace GA.Presentation.Controllers
             if (isSuperAdmin)
             {
                 // "all" → filtre yok; aksi halde Matches ile (OwnerCompany öncelikli) süzülür.
-                partner = PartnerCatalog.ResolveFilter(partnerKey);
+                partner = await _partnerTenantService.ResolveFilterAsync(partnerKey);
             }
             else if (projectTenantId.HasValue)
             {
@@ -166,15 +171,85 @@ namespace GA.Presentation.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> CreateStation([FromBody] CreateStationDto dto)
+        public async Task<IActionResult> CreateStation(
+            [FromBody] CreateStationDto dto,
+            [FromQuery] string? partnerKey)
         {
-            var tenantId = _currentUserService.TenantId;
-            if (tenantId == Guid.Empty) return Unauthorized();
+            if (await _userAccessService.IsFieldWorkerOnlyForChatAsync())
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    message = "Saha personeli nokta ekleyemez.",
+                });
+            }
 
-            var station = new Station { Name = dto.Name, StatusType = StationStatusTypes.NormalizeOrDefault(dto.StatusType), PowerType = dto.PowerType, PersonnelName = dto.PersonnelName, PersonnelPhone = dto.PersonnelPhone, Edas = dto.Edas, Address = dto.Address, PointType = dto.PointType, City = dto.City, Location = new Point(dto.Longitude, dto.Latitude) { SRID = 4326 }, TenantId = tenantId };
+            if (string.IsNullOrWhiteSpace(dto.Name))
+                return BadRequest(new { message = "İstasyon adı zorunludur." });
+
+            if (dto.Latitude is < 35 or > 43 || dto.Longitude is < 25 or > 45)
+                return BadRequest(new { message = "Koordinatlar Türkiye sınırları dışında görünüyor." });
+
+            var isSuperAdmin = _currentUserService.TenantId == Guid.Empty;
+            Guid targetTenantId;
+
+            if (isSuperAdmin)
+            {
+                var partner = await _partnerTenantService.ResolveFilterAsync(partnerKey);
+                if (partner?.TenantId is Guid partnerTenantId && partnerTenantId != Guid.Empty)
+                {
+                    targetTenantId = partnerTenantId;
+                }
+                else if (dto.TenantId.HasValue && dto.TenantId.Value != Guid.Empty)
+                {
+                    targetTenantId = dto.TenantId.Value;
+                }
+                else
+                {
+                    return BadRequest(new { message = "Firma seçimi zorunludur. Önce sol üstten firma seçin." });
+                }
+
+                var tenantExists = await _context.Tenants
+                    .IgnoreQueryFilters()
+                    .AnyAsync(t => t.Id == targetTenantId && !t.IsDeleted && t.IsActive);
+
+                if (!tenantExists)
+                    return BadRequest(new { message = "Seçilen firma bulunamadı." });
+            }
+            else
+            {
+                targetTenantId = _currentUserService.TenantId;
+                if (targetTenantId == Guid.Empty)
+                    return Unauthorized(new { message = "Firma bilgisi bulunamadı." });
+            }
+
+            var station = new Station
+            {
+                Name = dto.Name.Trim(),
+                StatusType = StationStatusTypes.NormalizeOrDefault(dto.StatusType),
+                PowerType = string.IsNullOrWhiteSpace(dto.PowerType) ? "DC" : dto.PowerType.Trim(),
+                PersonnelName = string.IsNullOrWhiteSpace(dto.PersonnelName) ? "-" : dto.PersonnelName.Trim(),
+                PersonnelPhone = string.IsNullOrWhiteSpace(dto.PersonnelPhone) ? "-" : dto.PersonnelPhone.Trim(),
+                Edas = string.IsNullOrWhiteSpace(dto.Edas) ? "-" : dto.Edas.Trim(),
+                Address = string.IsNullOrWhiteSpace(dto.Address) ? "-" : dto.Address.Trim(),
+                PointType = string.IsNullOrWhiteSpace(dto.PointType) ? "YG Abonelik" : dto.PointType.Trim(),
+                City = string.IsNullOrWhiteSpace(dto.City) ? "Ankara" : dto.City.Trim(),
+                Location = new Point(dto.Longitude, dto.Latitude) { SRID = 4326 },
+                TenantId = targetTenantId,
+            };
+
+            var (resolvedCityId, resolvedDistrictId) = await GeoResolver.ResolveAsync(
+                _context,
+                null,
+                null,
+                station.City,
+                null);
+
+            station.CityId = resolvedCityId;
+            station.DistrictId = resolvedDistrictId;
+
             _context.Stations.Add(station);
             await _context.SaveChangesAsync();
-            return Ok(new { message = "Saha noktası başarıyla oluşturuldu!" });
+            return Ok(new { message = "Saha noktası başarıyla oluşturuldu!", id = station.Id });
         }
 
         [HttpPut("{id:guid}")]

@@ -31,6 +31,7 @@ namespace GA.Presentation.Controllers
         private readonly IPushNotificationService _pushNotificationService;
         private readonly ITranslationService _translationService;
         private readonly IUserAccessService _userAccessService;
+        private readonly IPartnerTenantService _partnerTenantService;
 
         private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
         private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
@@ -43,7 +44,8 @@ namespace GA.Presentation.Controllers
             INotificationService notificationService,
             IPushNotificationService pushNotificationService,
             ITranslationService translationService,
-            IUserAccessService userAccessService)
+            IUserAccessService userAccessService,
+            IPartnerTenantService partnerTenantService)
         {
             _context = context;
             _currentUserService = currentUserService;
@@ -53,6 +55,7 @@ namespace GA.Presentation.Controllers
             _pushNotificationService = pushNotificationService;
             _translationService = translationService;
             _userAccessService = userAccessService;
+            _partnerTenantService = partnerTenantService;
         }
 
         private const string PurgeConfirmText = "CONFIRM_PURGE_ALL";
@@ -113,12 +116,13 @@ namespace GA.Presentation.Controllers
                 query = query.Where(w => w.AssignedToUserId == userId);
 
                 var nowUtc = DateTime.UtcNow;
-                query = query.Where(w => w.StartDate <= nowUtc && w.EndDate >= nowUtc);
+                var (monthStartUtc, monthEndUtc) = WorkOrderMobileVisibility.GetTurkeyCurrentMonthUtcBounds(nowUtc);
+                query = query.ApplyMobileListFilter(monthStartUtc, monthEndUtc);
             }
 
             if (isSuperAdmin)
             {
-                var partner = PartnerCatalog.ResolveFilter(partnerKey);
+                var partner = await _partnerTenantService.ResolveFilterAsync(partnerKey);
                 if (partner != null)
                 {
                     var stationRows = await _context.Stations
@@ -223,7 +227,7 @@ namespace GA.Presentation.Controllers
         {
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
-            var partner = isSuperAdmin ? PartnerCatalog.ResolveFilter(partnerKey) : null;
+            var partner = isSuperAdmin ? await _partnerTenantService.ResolveFilterAsync(partnerKey) : null;
 
             var teamRows = await _context.Users
                 .IgnoreQueryFilters()
@@ -640,6 +644,7 @@ namespace GA.Presentation.Controllers
                 // Sahacı atanınca operasyon sorumlusu ve işi açan yetkili de aynı kişiye çekilir
                 workOrder.OperationUserId = assignee.Id;
                 workOrder.OpenedByUserId = assignee.Id;
+                WorkOrderMobileVisibility.RefreshArızaScheduleOnAssign(workOrder, DateTime.UtcNow);
                 WorkOrderStatus.ApplyOnAssign(workOrder);
                 await _context.SaveChangesAsync();
 
@@ -666,6 +671,8 @@ namespace GA.Presentation.Controllers
                 {
                     message = "İş emri personele atandı.",
                     status = workOrder.Status,
+                    startDate = workOrder.StartDate.ToString("yyyy-MM-dd HH:mm"),
+                    endDate = workOrder.EndDate.ToString("yyyy-MM-dd HH:mm"),
                     assignedToUserId = assignee.Id,
                     assignedToUserName = assignee.FullName,
                     operationUserId = assignee.Id,
@@ -774,7 +781,7 @@ namespace GA.Presentation.Controllers
         }
 
         /// <summary>
-        /// Ofisten Tamamlandı (atama/fotoğraf şart değil; zorunlu saha notu).
+        /// Ofisten Tamamlandı veya İptal (atama/fotoğraf şart değil; saha notu isteğe bağlı).
         /// POST /api/workorders/{id}/office-close
         /// </summary>
         [HttpPost("{id:guid}/office-close")]
@@ -795,23 +802,47 @@ namespace GA.Presentation.Controllers
             if (transitionError != null)
                 return BadRequest(new { message = transitionError });
 
+            var targetStatus = WorkOrderStatus.ResolveOfficeCloseTarget(dto.Status);
+            if (targetStatus == null)
+            {
+                return BadRequest(new
+                {
+                    message = "Geçersiz kapanış durumu. Yalnızca Tamamlandı veya İptal seçilebilir.",
+                });
+            }
+
             var note = (dto.FieldNote ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(note))
-                return BadRequest(new { message = "Saha notu zorunludur." });
 
             var now = DateTime.UtcNow;
-            workOrder.FieldNote = note;
-            workOrder.FieldNoteAddedAt = now;
-            workOrder.FieldNoteEn = null;
-            workOrder.Status = WorkOrderStatus.Completed;
-            workOrder.CompletedAt ??= now;
+            if (!string.IsNullOrWhiteSpace(note))
+            {
+                workOrder.FieldNote = note;
+                workOrder.FieldNoteAddedAt = now;
+                workOrder.FieldNoteEn = null;
+            }
+
+            if (string.Equals(targetStatus, WorkOrderStatus.Completed, StringComparison.OrdinalIgnoreCase))
+            {
+                workOrder.Status = WorkOrderStatus.Completed;
+                workOrder.CompletedAt ??= now;
+            }
+            else
+            {
+                workOrder.Status = WorkOrderStatus.Cancelled;
+                workOrder.CancelledAt ??= now;
+            }
+
             workOrder.UpdatedAt = now;
 
             await _context.SaveChangesAsync();
 
+            var statusLabel = string.Equals(targetStatus, WorkOrderStatus.Completed, StringComparison.OrdinalIgnoreCase)
+                ? "Tamamlandı"
+                : "İptal";
+
             await _notificationService.NotifyAsync(
                 "WorkOrderStatusChanged",
-                "İş emri ofisten kapatıldı",
+                $"İş emri ofisten {statusLabel} olarak kapatıldı",
                 $"{workOrder.CustomerName}: {workOrder.Status}",
                 workOrder.TenantId,
                 workOrder.Id,
@@ -820,9 +851,10 @@ namespace GA.Presentation.Controllers
 
             return Ok(new
             {
-                message = "İş emri Tamamlandı olarak kapatıldı.",
+                message = $"İş emri {statusLabel} olarak kapatıldı.",
                 status = workOrder.Status,
                 completedAt = workOrder.CompletedAt,
+                cancelledAt = workOrder.CancelledAt,
                 fieldNote = workOrder.FieldNote,
                 fieldNoteAddedAt = workOrder.FieldNoteAddedAt?.ToString("yyyy-MM-dd HH:mm"),
             });
@@ -882,6 +914,7 @@ namespace GA.Presentation.Controllers
                 workOrder.OperationUserId = assignee.Id;
                 workOrder.OpenedByUserId = assignee.Id;
                 workOrder.UpdatedAt = DateTime.UtcNow;
+                WorkOrderMobileVisibility.RefreshArızaScheduleOnAssign(workOrder, DateTime.UtcNow);
                 WorkOrderStatus.ApplyOnAssign(workOrder);
                 updated++;
 
@@ -1363,7 +1396,10 @@ namespace GA.Presentation.Controllers
                 {
                     workOrder.AssignedToUserId = newAssignee;
                     if (newAssignee.HasValue)
+                    {
+                        WorkOrderMobileVisibility.RefreshArızaScheduleOnAssign(workOrder, DateTime.UtcNow);
                         WorkOrderStatus.ApplyOnAssign(workOrder);
+                    }
                     else
                         WorkOrderStatus.ApplyOnUnassign(workOrder);
                 }
@@ -1614,7 +1650,9 @@ namespace GA.Presentation.Controllers
 
     public class OfficeCloseWorkOrderDto
     {
-        public string FieldNote { get; set; } = string.Empty;
+        public string? FieldNote { get; set; }
+        /// <summary>Tamamlandı (varsayılan) veya İptal</summary>
+        public string? Status { get; set; }
     }
 
     public class UpdateWorkOrderScheduleDto

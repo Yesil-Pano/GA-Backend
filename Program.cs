@@ -5,6 +5,7 @@ using GA.Application.Features.Location;
 using GA.Application.Features.Notifications;
 using GA.Application.Features.Translation;
 using GA.Application.Features.OfficeChat;
+using GA.Application.Features.Partners;
 using GA.Application.Features.WorkOrders;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Background;
@@ -69,6 +70,7 @@ builder.Services.AddHttpClient("translation", client =>
 builder.Services.AddScoped<ITranslationService, TranslationService>();
 
 builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IPartnerTenantService, PartnerTenantService>();
 
 // Periyodik iş emri otomasyonu
 builder.Services.Configure<PeriodicWorkOrdersOptions>(

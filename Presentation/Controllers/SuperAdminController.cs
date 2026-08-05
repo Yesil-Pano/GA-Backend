@@ -1,4 +1,5 @@
-﻿using GA.Application.Features.Users;
+﻿using GA.Application.Features.Partners;
+using GA.Application.Features.Users;
 using GA.Application.Features.Users.DTOs;
 using GA.Core.Domain.Constants;
 using GA.Core.Domain.Entities;
@@ -23,17 +24,20 @@ namespace GA.Presentation.Controllers
         private readonly ICurrentUserService _currentUserService;
         private readonly IMemoryCache _cache;
         private readonly IUserManagementService _userManagementService;
+        private readonly IPartnerTenantService _partnerTenantService;
 
         public SuperAdminController(
             ApplicationDbContext context,
             ICurrentUserService currentUserService,
             IMemoryCache cache,
-            IUserManagementService userManagementService)
+            IUserManagementService userManagementService,
+            IPartnerTenantService partnerTenantService)
         {
             _context = context;
             _currentUserService = currentUserService;
             _cache = cache;
             _userManagementService = userManagementService;
+            _partnerTenantService = partnerTenantService;
         }
 
         private async Task<bool> IsUserSuperAdmin()
@@ -70,6 +74,14 @@ namespace GA.Presentation.Controllers
                 demoExpiresAt = DateTime.UtcNow.AddDays(days.Value);
             }
 
+            var partnerKey = await PartnerKeyGenerator.ResolveUniquePartnerKeyAsync(
+                _context,
+                dto.Name,
+                dto.PartnerKey);
+
+            if (partnerKey == null)
+                return BadRequest(new { message = "Firma anahtarı (PartnerKey) üretilemedi. Geçerli bir firma adı girin." });
+
             var tenant = new Tenant
             {
                 Name = dto.Name.Trim(),
@@ -77,11 +89,13 @@ namespace GA.Presentation.Controllers
                 IsActive = true,
                 IsDemo = isDemo,
                 DemoExpiresAt = demoExpiresAt,
+                PartnerKey = partnerKey,
                 CreatedAt = DateTime.UtcNow
             };
 
             _context.Tenants.Add(tenant);
             await _context.SaveChangesAsync();
+            await _partnerTenantService.InvalidateCacheAsync();
 
             return Ok(new
             {
@@ -89,6 +103,7 @@ namespace GA.Presentation.Controllers
                     ? $"{tenant.Name} DEMO firması oluşturuldu. Bitiş: {demoExpiresAt:yyyy-MM-dd HH:mm} UTC"
                     : $"{tenant.Name} firması başarıyla sisteme kaydedildi!",
                 tenantId = tenant.Id,
+                partnerKey = tenant.PartnerKey,
                 isDemo = tenant.IsDemo,
                 demoExpiresAt = tenant.DemoExpiresAt?.ToString("yyyy-MM-dd HH:mm"),
             });
@@ -117,6 +132,7 @@ namespace GA.Presentation.Controllers
                     isDemoExpired = t.IsDemo
                         && t.DemoExpiresAt.HasValue
                         && t.DemoExpiresAt.Value <= now,
+                    partnerKey = t.PartnerKey,
                     createdAt = t.CreatedAt.ToString("yyyy-MM-dd HH:mm"),
                 })
                 .ToListAsync();
@@ -227,6 +243,8 @@ namespace GA.Presentation.Controllers
     {
         public string Name { get; set; } = string.Empty;
         public string TaxNumber { get; set; } = string.Empty;
+        /// <summary>Opsiyonel. Boş bırakılırsa firma adından üretilir (ör. demoenerji).</summary>
+        public string? PartnerKey { get; set; }
         public bool IsDemo { get; set; }
         public string? DemoDuration { get; set; }
     }

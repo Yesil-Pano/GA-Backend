@@ -86,5 +86,22 @@ namespace GA.Application.Features.WorkOrders
 
             return $"Bu durumdaki iş emri ofisten kapatılamaz: {current}";
         }
+
+        /// <summary>Ofis kapanış hedef durumu — yalnızca Tamamlandı veya İptal.</summary>
+        public static string? ResolveOfficeCloseTarget(string? requestedStatus)
+        {
+            var status = (requestedStatus ?? Completed).Trim();
+            if (string.IsNullOrWhiteSpace(status))
+                return Completed;
+
+            if (string.Equals(status, Completed, StringComparison.OrdinalIgnoreCase))
+                return Completed;
+
+            if (string.Equals(status, Cancelled, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(status, CancelledAlt, StringComparison.OrdinalIgnoreCase))
+                return Cancelled;
+
+            return null;
+        }
     }
 }
