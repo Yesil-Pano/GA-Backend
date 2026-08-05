@@ -70,5 +70,21 @@ namespace GA.Application.Features.WorkOrders
 
             return $"Geçersiz durum geçişi: {current} → {next}";
         }
+
+        /// <summary>Ofisten Tamamlandı: Atanmamış, Bekliyor veya Devam Ediyor.</summary>
+        public static string? ValidateOfficeCloseTransition(string currentStatus)
+        {
+            var current = (currentStatus ?? string.Empty).Trim();
+
+            if (IsTerminal(current))
+                return "Tamamlanmış veya iptal edilmiş iş emri kapatılamaz.";
+
+            if (string.Equals(current, Unassigned, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(current, Waiting, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(current, InProgress, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            return $"Bu durumdaki iş emri ofisten kapatılamaz: {current}";
+        }
     }
 }

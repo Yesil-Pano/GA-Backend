@@ -23,8 +23,8 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Yetki belgesi PDF yükleme (max ~27 MB + pay)
-const long MaxUploadBytes = 30L * 1024 * 1024;
+// Açılış ekleri Base64 JSON: 30 MB video ≈ 40 MB gövde; pay bırak
+const long MaxUploadBytes = 64L * 1024 * 1024;
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = MaxUploadBytes;

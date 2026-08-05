@@ -186,6 +186,8 @@ namespace GA.Presentation.Controllers
                     openedByUserId = w.OpenedByUserId,
                     openedByUserName = _context.Users.Where(u => u.Id == w.OpenedByUserId).Select(u => u.FullName).FirstOrDefault() ?? "-",
 
+                    createdAt = w.CreatedAt,
+
                     // 🚀 DÜZELTME: Mobil uygulamanın çökmemesi için beklediği eksik zaman damgaları eklendi
                     startedAt = w.StartedAt,
                     completedAt = w.CompletedAt,
@@ -663,6 +665,7 @@ namespace GA.Presentation.Controllers
                 return Ok(new
                 {
                     message = "İş emri personele atandı.",
+                    status = workOrder.Status,
                     assignedToUserId = assignee.Id,
                     assignedToUserName = assignee.FullName,
                     operationUserId = assignee.Id,
@@ -689,6 +692,7 @@ namespace GA.Presentation.Controllers
             return Ok(new
             {
                 message = "İş emri ataması kaldırıldı.",
+                status = workOrder.Status,
                 assignedToUserId = (Guid?)null,
                 assignedToUserName = "Atanmamış",
             });
@@ -703,6 +707,15 @@ namespace GA.Presentation.Controllers
 
             var assigneeError = EnsureAssigneeForFieldMutation(workOrder);
             if (assigneeError != null) return assigneeError;
+
+            // Eski kayıtlar: atanmış ama durum henüz Atanmamış kalmışsa otomatik düzelt
+            if (string.Equals(workOrder.Status, WorkOrderStatus.Unassigned, StringComparison.OrdinalIgnoreCase)
+                && workOrder.AssignedToUserId.HasValue
+                && workOrder.AssignedToUserId.Value != Guid.Empty
+                && !workOrder.StartedAt.HasValue)
+            {
+                WorkOrderStatus.ApplyOnAssign(workOrder);
+            }
 
             var status = (dto.Status ?? string.Empty).Trim();
             var transitionError = WorkOrderStatus.ValidateFieldTransition(workOrder.Status, status);
@@ -757,6 +770,61 @@ namespace GA.Presentation.Controllers
                 startedAt = workOrder.StartedAt,
                 completedAt = workOrder.CompletedAt,
                 cancelledAt = workOrder.CancelledAt,
+            });
+        }
+
+        /// <summary>
+        /// Ofisten Tamamlandı (atama/fotoğraf şart değil; zorunlu saha notu).
+        /// POST /api/workorders/{id}/office-close
+        /// </summary>
+        [HttpPost("{id:guid}/office-close")]
+        public async Task<IActionResult> OfficeClose(Guid id, [FromBody] OfficeCloseWorkOrderDto dto)
+        {
+            if (!await _userAccessService.CanAccessOfficeChatInboxAsync())
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    message = "Ofisten iş emri kapatma yetkiniz yok.",
+                });
+            }
+
+            var workOrder = await FindWorkOrderForMutationAsync(id);
+            if (workOrder == null) return NotFound(new { message = "İş emri bulunamadı." });
+
+            var transitionError = WorkOrderStatus.ValidateOfficeCloseTransition(workOrder.Status);
+            if (transitionError != null)
+                return BadRequest(new { message = transitionError });
+
+            var note = (dto.FieldNote ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(note))
+                return BadRequest(new { message = "Saha notu zorunludur." });
+
+            var now = DateTime.UtcNow;
+            workOrder.FieldNote = note;
+            workOrder.FieldNoteAddedAt = now;
+            workOrder.FieldNoteEn = null;
+            workOrder.Status = WorkOrderStatus.Completed;
+            workOrder.CompletedAt ??= now;
+            workOrder.UpdatedAt = now;
+
+            await _context.SaveChangesAsync();
+
+            await _notificationService.NotifyAsync(
+                "WorkOrderStatusChanged",
+                "İş emri ofisten kapatıldı",
+                $"{workOrder.CustomerName}: {workOrder.Status}",
+                workOrder.TenantId,
+                workOrder.Id,
+                _currentUserService.UserId == Guid.Empty ? null : _currentUserService.UserId,
+                workOrder.AssignedToUserId);
+
+            return Ok(new
+            {
+                message = "İş emri Tamamlandı olarak kapatıldı.",
+                status = workOrder.Status,
+                completedAt = workOrder.CompletedAt,
+                fieldNote = workOrder.FieldNote,
+                fieldNoteAddedAt = workOrder.FieldNoteAddedAt?.ToString("yyyy-MM-dd HH:mm"),
             });
         }
 
@@ -1283,9 +1351,23 @@ namespace GA.Presentation.Controllers
             workOrder.Location = new NetTopologySuite.Geometries.Point(dto.Longitude, dto.Latitude) { SRID = 4326 };
             workOrder.OperationUserId = dto.OperationUserId;
             workOrder.OpenedByUserId = dto.OpenedByUserId;
-            // Atama değişikliği yalnızca Super Admin
+            // Atama değişikliği yalnızca Super Admin; durum create/assign ile aynı kurallarla senkronize edilir
             if (isSuperAdmin)
-                workOrder.AssignedToUserId = dto.AssignedToUserId;
+            {
+                var previousAssignee = workOrder.AssignedToUserId;
+                var newAssignee = dto.AssignedToUserId.HasValue && dto.AssignedToUserId.Value != Guid.Empty
+                    ? dto.AssignedToUserId
+                    : null;
+
+                if (previousAssignee != newAssignee)
+                {
+                    workOrder.AssignedToUserId = newAssignee;
+                    if (newAssignee.HasValue)
+                        WorkOrderStatus.ApplyOnAssign(workOrder);
+                    else
+                        WorkOrderStatus.ApplyOnUnassign(workOrder);
+                }
+            }
             workOrder.IsPeriodic = dto.IsPeriodic;
             workOrder.RecurrenceInterval = dto.IsPeriodic
                 ? (string.IsNullOrWhiteSpace(dto.RecurrenceInterval) ? "Aylik" : dto.RecurrenceInterval)
@@ -1316,6 +1398,7 @@ namespace GA.Presentation.Controllers
             {
                 message = "İş emri güncellendi.",
                 id = workOrder.Id,
+                status = workOrder.Status,
                 title = workOrder.Title,
                 customerName = workOrder.CustomerName,
                 description = workOrder.Description,
@@ -1527,6 +1610,11 @@ namespace GA.Presentation.Controllers
     {
         public string Status { get; set; } = string.Empty;
         public string? FieldNote { get; set; }
+    }
+
+    public class OfficeCloseWorkOrderDto
+    {
+        public string FieldNote { get; set; } = string.Empty;
     }
 
     public class UpdateWorkOrderScheduleDto

@@ -40,6 +40,7 @@ namespace GA.Presentation.Controllers
         /// POST /api/photos
         /// </summary>
         [HttpPost]
+        [RequestSizeLimit(64L * 1024 * 1024)]
         public async Task<IActionResult> Upload([FromBody] UploadPhotoRequest request)
         {
             var tenantId = _currentUserService.TenantId;
