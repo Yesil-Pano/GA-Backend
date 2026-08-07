@@ -152,6 +152,7 @@ namespace GA.Presentation.Controllers
             }
 
             var workOrders = await query
+                .OrderByDescending(w => w.CreatedAt)
                 .Select(w => new {
                     id = w.Id,
                     title = w.Title,
@@ -1417,6 +1418,17 @@ namespace GA.Presentation.Controllers
             if (dto.DistrictId.HasValue && dto.DistrictId != Guid.Empty)
                 workOrder.DistrictId = dto.DistrictId;
 
+            if (dto.FieldNote != null)
+            {
+                var note = dto.FieldNote.Trim();
+                if (note != (workOrder.FieldNote ?? string.Empty).Trim())
+                {
+                    workOrder.FieldNote = note;
+                    workOrder.FieldNoteAddedAt = string.IsNullOrEmpty(note) ? null : DateTime.UtcNow;
+                    workOrder.FieldNoteEn = null;
+                }
+            }
+
             workOrder.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
@@ -1460,6 +1472,8 @@ namespace GA.Presentation.Controllers
                 nextExecutionDate = workOrder.NextExecutionDate.HasValue
                     ? workOrder.NextExecutionDate.Value.ToString("yyyy-MM-dd HH:mm")
                     : null,
+                fieldNote = workOrder.FieldNote,
+                fieldNoteAddedAt = workOrder.FieldNoteAddedAt?.ToString("yyyy-MM-dd HH:mm"),
             });
         }
 
@@ -1502,24 +1516,22 @@ namespace GA.Presentation.Controllers
         }
 
         /// <summary>
-        /// Tenant iş emri açtığında yalnızca Super Admin'lere (web + push).
-        /// Super Admin oluştururken doğrudan atama yaptıysa yalnızca atanan kişiye gider.
+        /// İş emri oluşturulduğunda diğer Super Admin'lere bildirim (işi açan hariç).
+        /// Tenant web kullanıcısı açtığında da aynı mantık; oluşturan kendi bildirimini almaz.
         /// </summary>
         private async Task DispatchWorkOrderCreateNotificationsAsync(
             WorkOrder workOrder,
             Guid actorUserId,
             bool actorIsSuperAdmin)
         {
-            if (actorIsSuperAdmin
-                && workOrder.AssignedToUserId.HasValue
-                && workOrder.AssignedToUserId != Guid.Empty)
+            await NotifySuperAdminsWorkOrderCreatedAsync(workOrder, actorUserId, actorIsSuperAdmin);
+
+            if (workOrder.AssignedToUserId.HasValue
+                && workOrder.AssignedToUserId != Guid.Empty
+                && workOrder.AssignedToUserId != actorUserId)
             {
                 await NotifyAssigneeWorkOrderAssignedAsync(workOrder, actorUserId, workOrder.AssignedToUserId.Value);
-                return;
             }
-
-            if (!actorIsSuperAdmin)
-                await NotifySuperAdminsWorkOrderCreatedAsync(workOrder, actorUserId);
         }
 
         private async Task NotifyAssigneeWorkOrderAssignedAsync(
@@ -1547,7 +1559,10 @@ namespace GA.Presentation.Controllers
                 });
         }
 
-        private async Task NotifySuperAdminsWorkOrderCreatedAsync(WorkOrder workOrder, Guid actorUserId)
+        private async Task NotifySuperAdminsWorkOrderCreatedAsync(
+            WorkOrder workOrder,
+            Guid actorUserId,
+            bool actorIsSuperAdmin)
         {
             var superAdminIds = await _context.UserRoles
                 .IgnoreQueryFilters()
@@ -1561,14 +1576,40 @@ namespace GA.Presentation.Controllers
                 .Distinct()
                 .ToListAsync();
 
+            if (superAdminIds.Count == 0)
+                return;
+
+            var tenantName = await _context.Tenants
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(t => t.Id == workOrder.TenantId)
+                .Select(t => t.Name)
+                .FirstOrDefaultAsync() ?? "Firma";
+
+            string? actorFullName = null;
+            if (actorUserId != Guid.Empty)
+            {
+                actorFullName = await _context.Users
+                    .IgnoreQueryFilters()
+                    .AsNoTracking()
+                    .Where(u => u.Id == actorUserId)
+                    .Select(u => u.FullName)
+                    .FirstOrDefaultAsync();
+            }
+
+            var title = WorkOrderNotificationMessages.CreatedTitle(tenantName, !actorIsSuperAdmin);
+            var message = WorkOrderNotificationMessages.CreatedBody(workOrder, actorFullName);
+
             foreach (var adminId in superAdminIds)
             {
-                if (adminId == actorUserId) continue;
+                // İşi açan kullanıcı kendi bildirimini almasın
+                if (actorUserId != Guid.Empty && adminId == actorUserId)
+                    continue;
 
                 await _notificationService.NotifyAsync(
                     "WorkOrderCreated",
-                    "Yeni iş emri oluşturuldu",
-                    WorkOrderNotificationMessages.Body(workOrder),
+                    title,
+                    message,
                     workOrder.TenantId,
                     workOrder.Id,
                     actorUserId == Guid.Empty ? null : actorUserId,
@@ -1576,8 +1617,8 @@ namespace GA.Presentation.Controllers
 
                 await _pushNotificationService.SendToUserAsync(
                     adminId,
-                    "Yeni iş emri oluşturuldu",
-                    WorkOrderNotificationMessages.Body(workOrder),
+                    title,
+                    message,
                     new Dictionary<string, object>
                     {
                         ["type"] = "WorkOrderCreated",
@@ -1685,6 +1726,7 @@ namespace GA.Presentation.Controllers
         public DateTime? StartedAt { get; set; }
         public DateTime? CompletedAt { get; set; }
         public DateTime? CancelledAt { get; set; }
+        public string? FieldNote { get; set; }
     }
 
     public class BulkIdsDto
