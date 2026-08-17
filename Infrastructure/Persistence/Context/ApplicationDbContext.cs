@@ -59,6 +59,7 @@ namespace GA.Infrastructure.Persistence.Context
         public DbSet<Photo> Photos { get; set; } = null!;
         public DbSet<City> Cities { get; set; } = null!;
         public DbSet<District> Districts { get; set; } = null!;
+        public DbSet<EdasCompany> EdasCompanies { get; set; } = null!;
         public DbSet<AppNotification> AppNotifications { get; set; } = null!;
         public DbSet<UserPushToken> UserPushTokens { get; set; } = null!;
         public DbSet<UserWebPushSubscription> UserWebPushSubscriptions { get; set; } = null!;
@@ -167,6 +168,16 @@ namespace GA.Infrastructure.Persistence.Context
                     .IsUnique()
                     .HasFilter("\"PartnerKey\" IS NOT NULL")
                     .HasDatabaseName("IX_Tenants_PartnerKey");
+            });
+
+            modelBuilder.Entity<EdasCompany>(entity =>
+            {
+                entity.ToTable("EdasCompanies");
+                entity.Property(e => e.Name).HasMaxLength(100).IsRequired();
+                entity.HasIndex(e => e.Name)
+                    .IsUnique()
+                    .HasFilter("\"IsDeleted\" = false")
+                    .HasDatabaseName("IX_EdasCompanies_Name");
             });
 
             modelBuilder.Entity<District>(entity =>

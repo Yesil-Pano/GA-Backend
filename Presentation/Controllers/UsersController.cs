@@ -1,4 +1,5 @@
 ﻿using GA.Application.Features.Auth;
+using GA.Application.Features.Common;
 using GA.Application.Features.Users;
 using GA.Application.Features.Users.DTOs;
 using GA.Core.Domain.Constants;
@@ -77,7 +78,7 @@ namespace GA.Presentation.Controllers
                                     && d.DocumentType == FieldWorkerDocumentTypes.Authorization)
                         .Select(d => new { d.FileName, d.FileSize })
                         .FirstOrDefaultAsync();
-                    if (auth != null)
+                    if (auth != null && auth.FileSize > 0)
                     {
                         hasAuthDoc = true;
                         authFileName = auth.FileName;
@@ -169,12 +170,11 @@ namespace GA.Presentation.Controllers
                                           && !d.IsDeleted
                                           && d.DocumentType == FieldWorkerDocumentTypes.Authorization);
 
-            if (doc == null || doc.Data == null || doc.Data.Length == 0)
+            if (doc == null || doc.Data == null || doc.Data.Length == 0 || doc.FileSize <= 0)
                 return NotFound(new { message = "Yetki belgesi bulunamadı." });
 
             var fileName = string.IsNullOrWhiteSpace(doc.FileName) ? "yetki-belgesi.pdf" : doc.FileName;
-            Response.Headers["Content-Disposition"] = $"inline; filename=\"{fileName}\"";
-            return File(doc.Data, doc.ContentType ?? "application/pdf");
+            return FileDownloadResults.FromBytes(doc.Data, doc.ContentType ?? "application/pdf", fileName, "yetki-belgesi.pdf");
         }
 
         /// <summary>Super Admin: kullanıcı listesi. GET /api/users</summary>

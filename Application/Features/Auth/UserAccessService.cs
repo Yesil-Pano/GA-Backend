@@ -1,3 +1,4 @@
+using GA.Application.Features.Partners;
 using GA.Core.Domain.Constants;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
@@ -160,6 +161,12 @@ namespace GA.Application.Features.Auth
             if (await IsSuperAdminAsync(ct)) return true;
             if (await IsIsgInspectorAsync(ct)) return false;
             return true;
+        }
+
+        public async Task<bool> CanManageEdasCompaniesAsync(CancellationToken ct = default)
+        {
+            if (await IsSuperAdminAsync(ct)) return true;
+            return _currentUser.TenantId == PartnerCatalog.SeedTenantIds.Trugo;
         }
 
         private static bool IsSuperAdminEmail(string? email) =>

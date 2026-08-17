@@ -1,4 +1,5 @@
 ﻿using GA.Application.Features.Auth;
+using GA.Application.Features.Common;
 using GA.Application.Features.WorkOrders;
 using GA.Application.Features.Partners;
 using GA.Core.Domain.Constants;
@@ -598,8 +599,7 @@ namespace GA.Presentation.Controllers
             if (doc == null || doc.Data == null || doc.Data.Length == 0)
                 return NotFound(new { message = "Evrak bulunamadı." });
 
-            Response.Headers["Content-Disposition"] = $"inline; filename=\"{doc.FileName}\"";
-            return File(doc.Data, doc.ContentType);
+            return FileDownloadResults.FromBytes(doc.Data, doc.ContentType, doc.FileName, "evrak");
         }
 
         /// <summary>
@@ -665,8 +665,11 @@ namespace GA.Presentation.Controllers
             if (doc == null || doc.Data == null || doc.Data.Length == 0)
                 return NotFound(new { message = "Bu ekibe ait yetki belgesi yok." });
 
-            Response.Headers["Content-Disposition"] = $"inline; filename=\"{doc.FileName}\"";
-            return File(doc.Data, doc.ContentType);
+            return FileDownloadResults.FromBytes(
+                doc.Data,
+                doc.ContentType ?? "application/pdf",
+                doc.FileName,
+                "yetki-belgesi.pdf");
         }
 
         /// <summary>Geriye uyumluluk: Yetki Belgesi sil</summary>

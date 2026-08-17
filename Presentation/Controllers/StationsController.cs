@@ -317,5 +317,39 @@ namespace GA.Presentation.Controllers
                 position = new[] { station.Location.Y, station.Location.X }
             });
         }
+
+        /// <summary>
+        /// Saha noktasını soft-delete eder.
+        /// DELETE /api/stations/{id}
+        /// </summary>
+        [HttpDelete("{id:guid}")]
+        public async Task<IActionResult> DeleteStation(Guid id)
+        {
+            if (await _userAccessService.IsFieldWorkerOnlyForChatAsync())
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    message = "Saha personeli nokta silemez.",
+                });
+            }
+
+            var tenantId = _currentUserService.TenantId;
+            var isSuperAdmin = tenantId == Guid.Empty;
+
+            var station = await _context.Stations
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(s => s.Id == id && !s.IsDeleted &&
+                                          (isSuperAdmin || s.TenantId == tenantId));
+
+            if (station == null)
+                return NotFound(new { message = "İstasyon bulunamadı veya yetkiniz yetersiz." });
+
+            station.IsDeleted = true;
+            station.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Saha noktası silindi.", id = station.Id });
+        }
     }
 }

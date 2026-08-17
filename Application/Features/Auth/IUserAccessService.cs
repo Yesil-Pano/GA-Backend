@@ -28,5 +28,8 @@ namespace GA.Application.Features.Auth
         Task<bool> CanViewIsgPhotosAsync(CancellationToken ct = default);
 
         Task<bool> CanViewOperationPhotosAsync(CancellationToken ct = default);
+
+        /// <summary>Süper Admin veya Trugo kiracısı — EDAŞ listesine yeni isim ekleme.</summary>
+        Task<bool> CanManageEdasCompaniesAsync(CancellationToken ct = default);
     }
 }
