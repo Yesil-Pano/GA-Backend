@@ -6,5 +6,6 @@ namespace GA.Application.Features.Users
     {
         Task<ManagedUserResultDto> CreateUserAsync(CreateManagedUserDto dto, CancellationToken ct = default);
         Task<ManagedUserResultDto> UpdateUserAsync(Guid userId, UpdateManagedUserDto dto, CancellationToken ct = default);
+        Task DeleteUserAsync(Guid userId, Guid actorUserId, CancellationToken ct = default);
     }
 }

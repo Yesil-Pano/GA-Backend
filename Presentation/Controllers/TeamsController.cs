@@ -207,13 +207,25 @@ namespace GA.Presentation.Controllers
                 targetTenantId = dto.TenantId.Value;
             }
 
-            var exists = await _context.Users.IgnoreQueryFilters().AnyAsync(u => u.Email == dto.Email || u.Username == dto.Username);
-            if (exists) return BadRequest(new { Message = "Bu e-posta adresi veya kullanıcı adı zaten sistemde kayıtlı!" });
+            var normalizedEmail = dto.Email?.Trim() ?? string.Empty;
+            var normalizedUsername = dto.Username?.Trim() ?? string.Empty;
+
+            var emailTaken = await _context.Users.IgnoreQueryFilters().AnyAsync(u =>
+                !u.IsDeleted
+                && u.Email.ToLower() == normalizedEmail.ToLower());
+            if (emailTaken)
+                return BadRequest(new { Message = "Bu e-posta adresi zaten sistemde kayıtlı!" });
+
+            var usernameTaken = await _context.Users.IgnoreQueryFilters().AnyAsync(u =>
+                !u.IsDeleted
+                && u.Username.ToLower() == normalizedUsername.ToLower());
+            if (usernameTaken)
+                return BadRequest(new { Message = "Bu kullanıcı adı zaten sistemde kayıtlı!" });
 
             var user = new User
             {
-                Username = dto.Username,
-                Email = dto.Email,
+                Username = normalizedUsername,
+                Email = normalizedEmail,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
                 FullName = dto.Name,
                 PhoneNumber = dto.Phone,
@@ -277,13 +289,27 @@ namespace GA.Presentation.Controllers
             if (user == null)
                 return NotFound(new { Message = "Güncellenmek istenen ekip üyesi bulunamadı veya yetkiniz yetersiz." });
 
-            var exists = await _context.Users.IgnoreQueryFilters().AnyAsync(u => u.Id != id && (u.Email == dto.Email || u.Username == dto.Username));
-            if (exists) return BadRequest(new { Message = "Bu e-posta veya kullanıcı adı başka bir personele aittir!" });
+            var normalizedEmail = dto.Email?.Trim() ?? string.Empty;
+            var normalizedUsername = dto.Username?.Trim() ?? string.Empty;
+
+            var emailTaken = await _context.Users.IgnoreQueryFilters().AnyAsync(u =>
+                !u.IsDeleted
+                && u.Id != id
+                && u.Email.ToLower() == normalizedEmail.ToLower());
+            if (emailTaken)
+                return BadRequest(new { Message = "Bu e-posta adresi başka bir personele aittir!" });
+
+            var usernameTaken = await _context.Users.IgnoreQueryFilters().AnyAsync(u =>
+                !u.IsDeleted
+                && u.Id != id
+                && u.Username.ToLower() == normalizedUsername.ToLower());
+            if (usernameTaken)
+                return BadRequest(new { Message = "Bu kullanıcı adı başka bir personele aittir!" });
 
             user.FullName = dto.Name;
             user.PhoneNumber = dto.Phone;
-            user.Username = dto.Username;
-            user.Email = dto.Email;
+            user.Username = normalizedUsername;
+            user.Email = normalizedEmail;
 
             if (!string.IsNullOrWhiteSpace(dto.Password))
             {

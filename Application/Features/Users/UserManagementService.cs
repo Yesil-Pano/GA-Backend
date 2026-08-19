@@ -1,4 +1,5 @@
 using GA.Application.Features.Users.DTOs;
+using GA.Application.Features.WorkOrders;
 using GA.Core.Domain.Constants;
 using GA.Core.Domain.Entities;
 using GA.Infrastructure.Persistence.Context;
@@ -103,6 +104,54 @@ namespace GA.Application.Features.Users
             await _context.SaveChangesAsync(ct);
 
             return await MapResultAsync(user.Id, ct);
+        }
+
+        public async Task DeleteUserAsync(Guid userId, Guid actorUserId, CancellationToken ct = default)
+        {
+            if (userId == actorUserId)
+                throw new InvalidOperationException("Kendi hesabınızı silemezsiniz.");
+
+            var user = await _context.Users
+                .IgnoreQueryFilters()
+                .Include(u => u.FieldWorkerProfile)
+                .FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted, ct)
+                ?? throw new InvalidOperationException("Kullanıcı bulunamadı.");
+
+            var roleNames = await GetUserRoleNamesAsync(userId, ct);
+            if (roleNames.Any(r => string.Equals(r, RoleNames.SuperAdmin, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Super Admin hesabı silinemez.");
+
+            user.IsDeleted = true;
+            user.IsActive = false;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            if (user.FieldWorkerProfile != null && !user.FieldWorkerProfile.IsDeleted)
+            {
+                user.FieldWorkerProfile.IsDeleted = true;
+                user.FieldWorkerProfile.UpdatedAt = DateTime.UtcNow;
+            }
+
+            var openStatuses = new[]
+            {
+                WorkOrderStatus.Unassigned,
+                WorkOrderStatus.Waiting,
+                WorkOrderStatus.InProgress,
+            };
+
+            var openOrders = await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .Where(w => !w.IsDeleted
+                            && w.AssignedToUserId == userId
+                            && openStatuses.Contains(w.Status))
+                .ToListAsync(ct);
+
+            foreach (var order in openOrders)
+            {
+                order.AssignedToUserId = null;
+                WorkOrderStatus.ApplyOnUnassign(order);
+            }
+
+            await _context.SaveChangesAsync(ct);
         }
 
         private static void ValidateRequiredFields(

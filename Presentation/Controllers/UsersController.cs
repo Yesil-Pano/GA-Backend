@@ -283,6 +283,24 @@ namespace GA.Presentation.Controllers
             }
         }
 
+        /// <summary>Super Admin: kullanıcı sil (soft delete). DELETE /api/users/{id}</summary>
+        [HttpDelete("{id:guid}")]
+        public async Task<IActionResult> DeleteUser(Guid id)
+        {
+            if (!await _userAccessService.IsSuperAdminAsync())
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin erişebilir." });
+
+            try
+            {
+                await _userManagementService.DeleteUserAsync(id, _currentUserService.UserId);
+                return Ok(new { message = "Kullanıcı silindi." });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
         /// <summary>Super Admin: kullanıcı rollerini güncelle. PUT /api/users/{id}/roles</summary>
         [HttpPut("{id:guid}/roles")]
         public async Task<IActionResult> UpdateUserRoles(Guid id, [FromBody] UpdateUserRolesDto dto)
