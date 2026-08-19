@@ -152,34 +152,13 @@ namespace GA.Presentation.Controllers
             var tenantId = _currentUserService.TenantId;
             var isSuperAdmin = tenantId == Guid.Empty;
 
-            var projectsQuery = _context.Projects
-                .IgnoreQueryFilters()
-                .Where(p => !p.IsDeleted &&
-                            (isSuperAdmin ||
-                             p.TenantId == tenantId));
+            var projects = await GetAssignableProjectLookupRowsAsync(
+                isSuperAdmin,
+                tenantId,
+                tenantIdFilter,
+                partnerKey);
 
-            if (isSuperAdmin && tenantIdFilter.HasValue && tenantIdFilter.Value != Guid.Empty)
-            {
-                projectsQuery = projectsQuery.Where(p => p.TenantId == tenantIdFilter.Value);
-            }
-
-            var projects = await projectsQuery
-                .Select(p => new { id = p.Id, name = p.Name, tenantId = p.TenantId })
-                .OrderBy(p => p.name)
-                .ToListAsync();
-
-            if (isSuperAdmin && (!tenantIdFilter.HasValue || tenantIdFilter.Value == Guid.Empty))
-            {
-                var partner = await _partnerTenantService.ResolveFilterAsync(partnerKey);
-                if (partner != null)
-                {
-                    projects = projects
-                        .Where(p => PartnerCatalog.Matches(partner, p.tenantId, null, p.name))
-                        .ToList();
-                }
-            }
-
-            return Ok(projects);
+            return Ok(projects.Select(p => new { id = p.Id, name = p.Name, tenantId = p.TenantId }));
         }
 
         [HttpGet("capabilities")]
@@ -774,7 +753,19 @@ namespace GA.Presentation.Controllers
             if (isSuperAdmin)
             {
                 if (tenantIdFilter.HasValue && tenantIdFilter.Value != Guid.Empty)
+                {
                     query = query.Where(p => p.TenantId == tenantIdFilter.Value);
+                }
+                else
+                {
+                    var scopeTenantId = await ResolveProjectScopeTenantIdAsync(
+                        isSuperAdmin: true,
+                        callerTenantId: adminTenantId,
+                        tenantIdFilter: null,
+                        partnerKey);
+                    if (scopeTenantId.HasValue)
+                        query = query.Where(p => p.TenantId == scopeTenantId.Value);
+                }
             }
             else
             {
@@ -783,19 +774,85 @@ namespace GA.Presentation.Controllers
 
             var projects = await query.ToListAsync();
 
-            if (isSuperAdmin && (!tenantIdFilter.HasValue || tenantIdFilter.Value == Guid.Empty))
+            return (projects, projects.Count == distinctIds.Count);
+        }
+
+        /// <summary>
+        /// Ekip ataması için proje listesi — kiracı kimliği ile filtrelenir; isim/token eşlemesi kullanılmaz.
+        /// </summary>
+        private async Task<List<ProjectLookupRow>> GetAssignableProjectLookupRowsAsync(
+            bool isSuperAdmin,
+            Guid callerTenantId,
+            Guid? tenantIdFilter,
+            string? partnerKey)
+        {
+            var scopeTenantId = await ResolveProjectScopeTenantIdAsync(
+                isSuperAdmin,
+                callerTenantId,
+                tenantIdFilter,
+                partnerKey);
+
+            IQueryable<Project> baseQuery = _context.Projects
+                .IgnoreQueryFilters()
+                .Where(p => !p.IsDeleted);
+
+            if (!isSuperAdmin)
             {
-                var partner = await _partnerTenantService.ResolveFilterAsync(partnerKey);
-                if (partner != null)
+                baseQuery = baseQuery.Where(p => p.TenantId == callerTenantId);
+            }
+            else if (scopeTenantId.HasValue)
+            {
+                baseQuery = baseQuery.Where(p => p.TenantId == scopeTenantId.Value);
+            }
+
+            var projectMap = await baseQuery
+                .Select(p => new ProjectLookupRow(p.Id, p.Name, p.TenantId))
+                .ToDictionaryAsync(p => p.Id);
+
+            if (scopeTenantId.HasValue)
+            {
+                var linked = await _context.FieldWorkerProfiles
+                    .IgnoreQueryFilters()
+                    .Where(f => !f.IsDeleted
+                                && f.User != null
+                                && !f.User.IsDeleted
+                                && f.User.TenantId == scopeTenantId.Value)
+                    .SelectMany(f => f.Projects)
+                    .Where(p => !p.IsDeleted)
+                    .Select(p => new ProjectLookupRow(p.Id, p.Name, p.TenantId))
+                    .ToListAsync();
+
+                foreach (var row in linked)
                 {
-                    projects = projects
-                        .Where(p => PartnerCatalog.Matches(partner, p.TenantId, null, p.Name))
-                        .ToList();
+                    projectMap.TryAdd(row.Id, row);
                 }
             }
 
-            return (projects, projects.Count == distinctIds.Count);
+            return projectMap.Values
+                .OrderBy(p => p.Name)
+                .ToList();
         }
+
+        private async Task<Guid?> ResolveProjectScopeTenantIdAsync(
+            bool isSuperAdmin,
+            Guid callerTenantId,
+            Guid? tenantIdFilter,
+            string? partnerKey)
+        {
+            if (!isSuperAdmin)
+                return callerTenantId == Guid.Empty ? null : callerTenantId;
+
+            if (tenantIdFilter.HasValue && tenantIdFilter.Value != Guid.Empty)
+                return tenantIdFilter.Value;
+
+            var partner = await _partnerTenantService.ResolveFilterAsync(partnerKey);
+            if (partner?.TenantId is Guid partnerTenantId && partnerTenantId != Guid.Empty)
+                return partnerTenantId;
+
+            return null;
+        }
+
+        private sealed record ProjectLookupRow(Guid Id, string Name, Guid TenantId);
 
         private async Task<FieldWorkerProfile?> FindAccessibleProfileAsync(Guid userId)
         {

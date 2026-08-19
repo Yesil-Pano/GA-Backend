@@ -152,7 +152,9 @@ builder.Services.AddCors(options =>
                 "https://204.168.249.86:8443",
                 "http://204.168.249.86:8443",
                 "http://204.168.249.86:8080",
-                "http://204.168.249.86:8081")
+                "http://204.168.249.86:8081",
+                "https://gorevadami.net",
+                "https://www.gorevadami.net")
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
