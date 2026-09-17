@@ -63,29 +63,28 @@ namespace GA.Application.Features.WorkOrders
                 .ToListAsync(cancellationToken);
 
             var created = 0;
-            var cursorStart = DateTime.SpecifyKind(template.StartDate, DateTimeKind.Utc);
+            var templateLocal = TurkeyTime.ToLocal(template.StartDate);
+            var openingMonth = templateLocal.Month;
+            var openingDay = Math.Min(templateLocal.Day, 28);
 
-            while (true)
+            for (var month = openingMonth + 1; month <= 12; month++)
             {
-                var nextStart = DateTime.SpecifyKind(
-                    WorkOrderRecurrence.ComputeNextExecution(cursorStart, template.RecurrenceInterval),
-                    DateTimeKind.Utc);
+                var daysInMonth = DateTime.DaysInMonth(calendarYear, month);
+                var day = Math.Min(openingDay, daysInMonth);
+                var nextStartLocal = new DateTime(calendarYear, month, day, templateLocal.Hour, templateLocal.Minute, templateLocal.Second, DateTimeKind.Unspecified);
+                var nextStart = DateTime.SpecifyKind(TurkeyTime.ToUtc(nextStartLocal), DateTimeKind.Utc);
 
                 if (!IsWithinCalendarYear(nextStart, calendarYear))
                     break;
 
                 if (existingStarts.Any(s => IsSamePeriod(s, nextStart)))
-                {
-                    cursorStart = nextStart;
                     continue;
-                }
 
                 var nextEnd = nextStart.Add(duration);
                 var clone = CreatePeriodFromTemplate(template, nextStart, nextEnd);
                 _context.WorkOrders.Add(clone);
                 existingStarts.Add(nextStart);
                 created++;
-                cursorStart = nextStart;
             }
 
             template.NextExecutionDate = null;

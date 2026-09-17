@@ -20,6 +20,7 @@ namespace GA.Application.Features.Users
         public async Task<ManagedUserResultDto> CreateUserAsync(CreateManagedUserDto dto, CancellationToken ct = default)
         {
             ValidateRequiredFields(dto.Username, dto.Email, dto.FullName, dto.PhoneNumber, dto.Password, isCreate: true);
+            ProtectedSystemAccounts.EnsureEmailNotReserved(dto.Email);
 
             var requestedRoles = NormalizeRoleNames(dto.RoleNames);
             if (requestedRoles.Any(r => string.Equals(r, RoleNames.SuperAdmin, StringComparison.OrdinalIgnoreCase)))
@@ -63,6 +64,9 @@ namespace GA.Application.Features.Users
                 .Include(u => u.UserRoles)
                 .FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted, ct)
                 ?? throw new InvalidOperationException("Kullanıcı bulunamadı.");
+
+            ProtectedSystemAccounts.EnsureCanModify(user);
+            ProtectedSystemAccounts.EnsureEmailNotReserved(dto.Email);
 
             var existingRoleNames = await GetUserRoleNamesAsync(userId, ct);
             var hadSuperAdmin = existingRoleNames.Any(r =>
@@ -116,6 +120,8 @@ namespace GA.Application.Features.Users
                 .Include(u => u.FieldWorkerProfile)
                 .FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted, ct)
                 ?? throw new InvalidOperationException("Kullanıcı bulunamadı.");
+
+            ProtectedSystemAccounts.EnsureCanModify(user);
 
             var roleNames = await GetUserRoleNamesAsync(userId, ct);
             if (roleNames.Any(r => string.Equals(r, RoleNames.SuperAdmin, StringComparison.OrdinalIgnoreCase)))

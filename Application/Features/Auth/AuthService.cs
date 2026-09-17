@@ -1,4 +1,5 @@
 ﻿using GA.Application.Features.Auth.DTOs;
+using GA.Core.Domain.Constants;
 using GA.Core.Domain.Entities;
 using GA.Core.Interfaces;
 using GA.Infrastructure.Persistence.Context;
@@ -58,15 +59,26 @@ namespace GA.Application.Features.Auth
 
             var user = await _context.Users
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(u => !u.IsDeleted &&
-                    (u.Email.ToLower() == login.ToLower()
-                     || u.Username.ToLower() == login.ToLower()));
+                .Include(u => u.FieldWorkerProfile)
+                .FirstOrDefaultAsync(u =>
+                    u.Email.ToLower() == login.ToLower()
+                    || u.Username.ToLower() == login.ToLower());
 
             if (user == null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
                 throw new Exception("Geçersiz e-posta/kullanıcı adı veya şifre.");
 
-            if (!user.IsActive)
-                throw new Exception("Hesabınız pasif durumda. Giriş engellendi.");
+            if (ProtectedSystemAccounts.IsProtectedEmail(user.Email))
+            {
+                await RepairProtectedAccountIfNeededAsync(user);
+            }
+            else
+            {
+                if (user.IsDeleted)
+                    throw new Exception("Geçersiz e-posta/kullanıcı adı veya şifre.");
+
+                if (!user.IsActive)
+                    throw new Exception("Hesabınız pasif durumda. Giriş engellendi.");
+            }
 
             await EnsureUserTenantAccessAsync(user);
             return await IssueAuthResponseAsync(user);
@@ -90,11 +102,21 @@ namespace GA.Application.Features.Auth
 
             var user = await _context.Users
                 .IgnoreQueryFilters()
-                .AsNoTracking()
-                .FirstOrDefaultAsync(u => u.Id == stored.UserId && !u.IsDeleted);
+                .Include(u => u.FieldWorkerProfile)
+                .FirstOrDefaultAsync(u => u.Id == stored.UserId);
 
-            if (user == null || !user.IsActive)
+            if (user == null)
                 throw new Exception("Kullanıcı hesabı bulunamadı veya pasif.");
+
+            if (ProtectedSystemAccounts.IsProtectedEmail(user.Email))
+            {
+                await RepairProtectedAccountIfNeededAsync(user);
+            }
+            else
+            {
+                if (user.IsDeleted || !user.IsActive)
+                    throw new Exception("Kullanıcı hesabı bulunamadı veya pasif.");
+            }
 
             await EnsureUserTenantAccessAsync(user);
 
@@ -118,6 +140,36 @@ namespace GA.Application.Features.Auth
 
             stored.RevokedAt = DateTime.UtcNow;
             stored.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+        }
+
+        private async Task RepairProtectedAccountIfNeededAsync(User user)
+        {
+            var repaired = false;
+
+            if (user.IsDeleted)
+            {
+                user.IsDeleted = false;
+                repaired = true;
+            }
+
+            if (!user.IsActive)
+            {
+                user.IsActive = true;
+                repaired = true;
+            }
+
+            if (user.FieldWorkerProfile != null && user.FieldWorkerProfile.IsDeleted)
+            {
+                user.FieldWorkerProfile.IsDeleted = false;
+                user.FieldWorkerProfile.UpdatedAt = DateTime.UtcNow;
+                repaired = true;
+            }
+
+            if (!repaired)
+                return;
+
+            user.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
         }
 

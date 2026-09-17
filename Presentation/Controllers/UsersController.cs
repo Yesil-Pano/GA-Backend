@@ -193,7 +193,8 @@ namespace GA.Presentation.Controllers
             var users = await _context.Users
                 .IgnoreQueryFilters()
                 .AsNoTracking()
-                .Where(u => !u.IsDeleted)
+                .Where(u => !u.IsDeleted
+                            && u.Email.ToLower() != ProtectedSystemAccounts.PrimarySuperAdminEmailNormalized)
                 .OrderBy(u => u.FullName)
                 .Select(u => new
                 {

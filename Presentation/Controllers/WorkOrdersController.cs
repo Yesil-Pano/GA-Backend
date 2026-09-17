@@ -32,6 +32,7 @@ namespace GA.Presentation.Controllers
         private readonly ITranslationService _translationService;
         private readonly IUserAccessService _userAccessService;
         private readonly IPartnerTenantService _partnerTenantService;
+        private readonly IWorkOrderRepairService _workOrderRepairService;
 
         private readonly Guid _yesilPanoTenantId = Guid.Parse("475e2c63-5dca-41c8-ba0e-fd86917f32f0");
         private readonly Guid _trugoTenantId = Guid.Parse("c92cc573-957b-4862-8ae7-ff380efd15ce");
@@ -45,7 +46,8 @@ namespace GA.Presentation.Controllers
             IPushNotificationService pushNotificationService,
             ITranslationService translationService,
             IUserAccessService userAccessService,
-            IPartnerTenantService partnerTenantService)
+            IPartnerTenantService partnerTenantService,
+            IWorkOrderRepairService workOrderRepairService)
         {
             _context = context;
             _currentUserService = currentUserService;
@@ -56,6 +58,7 @@ namespace GA.Presentation.Controllers
             _translationService = translationService;
             _userAccessService = userAccessService;
             _partnerTenantService = partnerTenantService;
+            _workOrderRepairService = workOrderRepairService;
         }
 
         private const string PurgeConfirmText = "CONFIRM_PURGE_ALL";
@@ -94,6 +97,54 @@ namespace GA.Presentation.Controllers
                 result.PeriodsCreated,
                 result.PeriodLabelsUpdated,
             });
+        }
+
+        /// <summary>
+        /// Eksik periyodik dönemleri oluşturur ve erken kapatılmış gelecek dönemleri sıfırlar. Super Admin.
+        /// POST /api/workorders/periodic/repair
+        /// </summary>
+        [HttpPost("periodic/repair")]
+        public async Task<IActionResult> RepairPeriodicPeriods()
+        {
+            if (_currentUserService.TenantId != Guid.Empty)
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin kullanabilir." });
+
+            var result = await _workOrderRepairService.RepairPeriodicAsync();
+            return Ok(new
+            {
+                message = $"Periyodik onarım tamamlandı: {result.PeriodsCreated} dönem eklendi, {result.FutureCompletionsReset} erken kapanış sıfırlandı.",
+                result,
+            });
+        }
+
+        /// <summary>
+        /// OperationUserId == AssignedToUserId olan kayıtları düzeltir. Super Admin.
+        /// POST /api/workorders/repair-assignment-fields
+        /// </summary>
+        [HttpPost("repair-assignment-fields")]
+        public async Task<IActionResult> RepairAssignmentFields([FromBody] RepairAssignmentFieldsDto dto)
+        {
+            if (_currentUserService.TenantId != Guid.Empty)
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin kullanabilir." });
+
+            try
+            {
+                var result = await _workOrderRepairService.RepairAssignmentFieldsAsync(
+                    dto.DefaultOperationUserId,
+                    dto.DryRun);
+
+                return Ok(new
+                {
+                    message = result.DryRun
+                        ? $"{result.AffectedCount} kayıt onarım adayı (dry-run)."
+                        : $"{result.RepairedCount} kayıt güncellendi ({result.AffectedCount} aday).",
+                    result,
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
         }
 
         [HttpGet]
@@ -217,6 +268,13 @@ namespace GA.Presentation.Controllers
                     cityName = w.CityRef != null ? w.CityRef.Name : null,
                     districtName = w.DistrictRef != null ? w.DistrictRef.Name : null,
 
+                    stationStatusType = _context.Stations
+                        .Where(s => !s.IsDeleted
+                                    && s.TenantId == w.TenantId
+                                    && EF.Functions.ILike(s.Name, w.CustomerName))
+                        .Select(s => s.StatusType)
+                        .FirstOrDefault() ?? StationStatusTypes.BakimaDahil,
+
                     position = new[] { w.Location.Y, w.Location.X }
                 }).ToListAsync();
 
@@ -292,6 +350,12 @@ namespace GA.Presentation.Controllers
                     .ToList();
             }
 
+            var operationSupervisors = await WorkOrderOperationSupervisors
+                .QueryYesilPanoSupervisors(_context)
+                .Select(u => new { id = u.Id, name = u.FullName })
+                .OrderBy(u => u.name)
+                .ToListAsync();
+
             var stations = await _context.Stations
                 .IgnoreQueryFilters()
                 .Where(s => !s.IsDeleted &&
@@ -339,6 +403,7 @@ namespace GA.Presentation.Controllers
             return Ok(new {
                 teams,
                 officeUsers,
+                operationSupervisors,
                 stations,
                 projects,
                 types = new[] { "Arıza", "Bakım", "Kurulum", "Keşif", "Saha Operasyonu" },
@@ -370,6 +435,14 @@ namespace GA.Presentation.Controllers
 
             if (!isSuperAdmin && !string.IsNullOrWhiteSpace(dto.MobileDescription))
                 dto.MobileDescription = string.Empty;
+
+            var requiresYesilPanoOps = isOperationReporter || tenantId == _trugoTenantId;
+            if (requiresYesilPanoOps)
+            {
+                var opsError = await ValidateYesilPanoOperationSupervisorAsync(dto.OperationUserId);
+                if (opsError != null)
+                    return BadRequest(new { message = opsError });
+            }
 
             Guid targetTenantId = tenantId;
 
@@ -449,7 +522,7 @@ namespace GA.Presentation.Controllers
                 CustomerName = dto.CustomerName,
                 Priority = dto.Priority,
                 WorkType = dto.Type,
-                WorkCategory = dto.Category,
+                WorkCategory = ResolveWorkCategory(dto.Category, dto.IsPeriodic),
                 MobileDescription = dto.MobileDescription,
                 Address = dto.Address,
                 StartDate = DateTime.SpecifyKind(dto.StartDate, DateTimeKind.Utc),
@@ -517,6 +590,14 @@ namespace GA.Presentation.Controllers
             if (!isSuperAdmin && !string.IsNullOrWhiteSpace(dto.MobileDescription))
                 dto.MobileDescription = string.Empty;
 
+            var requiresYesilPanoOps = isOperationReporter || tenantId == _trugoTenantId;
+            if (requiresYesilPanoOps)
+            {
+                var opsError = await ValidateYesilPanoOperationSupervisorAsync(dto.OperationUserId);
+                if (opsError != null)
+                    return BadRequest(new { message = opsError });
+            }
+
             User? assignee = null;
             if (isSuperAdmin && dto.AssignedToUserId.HasValue && dto.AssignedToUserId != Guid.Empty)
             {
@@ -559,7 +640,7 @@ namespace GA.Presentation.Controllers
                     CustomerName = station.Name,
                     Priority = string.IsNullOrWhiteSpace(dto.Priority) ? "Orta" : dto.Priority,
                     WorkType = string.IsNullOrWhiteSpace(dto.Type) ? "Arıza" : dto.Type,
-                    WorkCategory = string.IsNullOrWhiteSpace(dto.Category) ? "Arıza Bildirimi" : dto.Category,
+                    WorkCategory = ResolveWorkCategory(dto.Category, dto.IsPeriodic),
                     StartDate = start,
                     EndDate = end,
                     Location = station.Location != null
@@ -641,13 +722,13 @@ namespace GA.Presentation.Controllers
                 if (assignee == null)
                     return BadRequest(new { message = "Seçilen saha personeli bulunamadı veya aktif değil." });
 
-                workOrder.AssignedToUserId = assignee.Id;
-                // Sahacı atanınca operasyon sorumlusu ve işi açan yetkili de aynı kişiye çekilir
-                workOrder.OperationUserId = assignee.Id;
-                workOrder.OpenedByUserId = assignee.Id;
+                ApplyFieldAssignee(workOrder, assignee.Id);
                 WorkOrderMobileVisibility.RefreshArızaScheduleOnAssign(workOrder, DateTime.UtcNow);
                 WorkOrderStatus.ApplyOnAssign(workOrder);
                 await _context.SaveChangesAsync();
+
+                var operationName = await ResolveUserFullNameAsync(workOrder.OperationUserId);
+                var openedByName = await ResolveUserFullNameAsync(workOrder.OpenedByUserId);
 
                 await _notificationService.NotifyAsync(
                     "WorkOrderAssigned",
@@ -676,10 +757,10 @@ namespace GA.Presentation.Controllers
                     endDate = workOrder.EndDate.ToString("yyyy-MM-dd HH:mm"),
                     assignedToUserId = assignee.Id,
                     assignedToUserName = assignee.FullName,
-                    operationUserId = assignee.Id,
-                    operationUserName = assignee.FullName,
-                    openedByUserId = assignee.Id,
-                    openedByUserName = assignee.FullName,
+                    operationUserId = workOrder.OperationUserId,
+                    operationUserName = operationName,
+                    openedByUserId = workOrder.OpenedByUserId,
+                    openedByUserName = openedByName,
                 });
             }
 
@@ -729,6 +810,10 @@ namespace GA.Presentation.Controllers
             var transitionError = WorkOrderStatus.ValidateFieldTransition(workOrder.Status, status);
             if (transitionError != null)
                 return BadRequest(new { message = transitionError });
+
+            var periodError = WorkOrderPeriodRules.ValidateFieldPeriodClose(workOrder, status, DateTime.UtcNow);
+            if (periodError != null)
+                return BadRequest(new { message = periodError });
 
             workOrder.Status = status;
 
@@ -911,9 +996,7 @@ namespace GA.Presentation.Controllers
                     .FirstOrDefaultAsync(w => w.Id == id && !w.IsDeleted);
                 if (workOrder == null) continue;
 
-                workOrder.AssignedToUserId = assignee.Id;
-                workOrder.OperationUserId = assignee.Id;
-                workOrder.OpenedByUserId = assignee.Id;
+                ApplyFieldAssignee(workOrder, assignee.Id);
                 workOrder.UpdatedAt = DateTime.UtcNow;
                 WorkOrderMobileVisibility.RefreshArızaScheduleOnAssign(workOrder, DateTime.UtcNow);
                 WorkOrderStatus.ApplyOnAssign(workOrder);
@@ -1067,6 +1150,75 @@ namespace GA.Presentation.Controllers
         }
 
         /// <summary>
+        /// Periyodik şablon atamalarını aktif dönem sahipliği ile hizalar (Super Admin bakım).
+        /// POST /api/workorders/sync-template-assignees
+        /// </summary>
+        [HttpPost("sync-template-assignees")]
+        public async Task<IActionResult> SyncPeriodicTemplateAssignees()
+        {
+            if (_currentUserService.TenantId != Guid.Empty)
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Yalnızca Super Admin kullanabilir." });
+
+            var templates = await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .Where(w => !w.IsDeleted && w.IsPeriodic && w.ParentWorkOrderId == null)
+                .ToListAsync();
+
+            if (templates.Count == 0)
+                return Ok(new { message = "Güncellenecek periyodik şablon bulunamadı.", fixedCount = 0 });
+
+            var templateIds = templates.Select(t => t.Id).ToList();
+            var children = await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .Where(w => !w.IsDeleted
+                            && w.ParentWorkOrderId != null
+                            && templateIds.Contains(w.ParentWorkOrderId.Value))
+                .ToListAsync();
+
+            var childrenByTemplate = children
+                .GroupBy(c => c.ParentWorkOrderId!.Value)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            var nowUtc = DateTime.UtcNow;
+            var (monthStartUtc, _) = WorkOrderMobileVisibility.GetTurkeyCurrentMonthUtcBounds(nowUtc);
+            var fixedCount = 0;
+
+            foreach (var template in templates)
+            {
+                if (!childrenByTemplate.TryGetValue(template.Id, out var periods))
+                    continue;
+
+                var activePeriod = periods
+                    .Where(p => !WorkOrderStatus.IsTerminal(p.Status))
+                    .OrderBy(p => p.StartDate)
+                    .FirstOrDefault(p => p.StartDate >= monthStartUtc)
+                    ?? periods
+                        .Where(p => !WorkOrderStatus.IsTerminal(p.Status))
+                        .OrderByDescending(p => p.StartDate)
+                        .FirstOrDefault();
+
+                if (activePeriod?.AssignedToUserId is not Guid assignee || assignee == Guid.Empty)
+                    continue;
+
+                if (template.AssignedToUserId == assignee)
+                    continue;
+
+                template.AssignedToUserId = assignee;
+                template.UpdatedAt = DateTime.UtcNow;
+                fixedCount++;
+            }
+
+            if (fixedCount > 0)
+                await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = $"{fixedCount} periyodik şablon ataması güncellendi.",
+                fixedCount,
+            });
+        }
+
+        /// <summary>
         /// Seçilen dönemden itibaren (dahil) sonraki tüm dönemlere atama. POST /api/workorders/{id}/reassign-forward
         /// </summary>
         [HttpPost("{id:guid}/reassign-forward")]
@@ -1116,6 +1268,17 @@ namespace GA.Presentation.Controllers
                 WorkOrderStatus.ApplyOnAssign(period);
                 period.UpdatedAt = DateTime.UtcNow;
                 updated++;
+            }
+
+            // Sonrasına atamasında şablon sahibi de güncellenir (web ekip kartı ile mobil uyumu)
+            var template = await _context.WorkOrders
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(w => w.Id == templateId && !w.IsDeleted);
+
+            if (template != null)
+            {
+                template.AssignedToUserId = assignee.Id;
+                template.UpdatedAt = DateTime.UtcNow;
             }
 
             await _context.SaveChangesAsync();
@@ -1395,14 +1558,17 @@ namespace GA.Presentation.Controllers
 
                 if (previousAssignee != newAssignee)
                 {
-                    workOrder.AssignedToUserId = newAssignee;
                     if (newAssignee.HasValue)
                     {
+                        ApplyFieldAssignee(workOrder, newAssignee.Value);
                         WorkOrderMobileVisibility.RefreshArızaScheduleOnAssign(workOrder, DateTime.UtcNow);
                         WorkOrderStatus.ApplyOnAssign(workOrder);
                     }
                     else
+                    {
+                        workOrder.AssignedToUserId = null;
                         WorkOrderStatus.ApplyOnUnassign(workOrder);
+                    }
                 }
             }
             workOrder.IsPeriodic = dto.IsPeriodic;
@@ -1513,6 +1679,51 @@ namespace GA.Presentation.Controllers
                      w.TenantId == tenantId ||
                      (tenantId == _yesilPanoTenantId && w.TenantId == _trugoTenantId) ||
                      (userId != Guid.Empty && w.AssignedToUserId == userId)));
+        }
+
+        private static string ResolveWorkCategory(string? category, bool isPeriodic)
+        {
+            if (isPeriodic && (string.IsNullOrWhiteSpace(category) ||
+                               string.Equals(category.Trim(), "Arıza Bildirimi", StringComparison.OrdinalIgnoreCase)))
+            {
+                return "Periyodik Bakım";
+            }
+
+            return string.IsNullOrWhiteSpace(category) ? "Arıza Bildirimi" : category.Trim();
+        }
+
+        private void ApplyFieldAssignee(WorkOrder workOrder, Guid assigneeId)
+        {
+            workOrder.AssignedToUserId = assigneeId;
+            var actorId = _currentUserService.UserId;
+            if (actorId != Guid.Empty)
+                workOrder.OpenedByUserId = actorId;
+        }
+
+        private async Task<string?> ValidateYesilPanoOperationSupervisorAsync(Guid? operationUserId)
+        {
+            if (!operationUserId.HasValue || operationUserId.Value == Guid.Empty)
+                return "Operasyon sorumlusu seçilmelidir. Lütfen Yeşil Pano operasyon sorumlusunu seçin (ör. Kaan Bey).";
+
+            var isValid = await WorkOrderOperationSupervisors.IsValidYesilPanoSupervisorAsync(
+                _context, operationUserId.Value);
+
+            return isValid
+                ? null
+                : "Operasyon sorumlusu, Yeşil Pano operasyon ekibinden (TenantAdmin/OfficeUser) seçilmelidir. Trugo hesabı bu alana yazılamaz.";
+        }
+
+        private async Task<string> ResolveUserFullNameAsync(Guid? userId)
+        {
+            if (!userId.HasValue || userId.Value == Guid.Empty)
+                return "-";
+
+            return await _context.Users
+                       .IgnoreQueryFilters()
+                       .Where(u => u.Id == userId.Value)
+                       .Select(u => u.FullName)
+                       .FirstOrDefaultAsync()
+                   ?? "-";
         }
 
         /// <summary>
@@ -1681,6 +1892,12 @@ namespace GA.Presentation.Controllers
     {
         public List<Guid> Ids { get; set; } = new();
         public Guid AssignedToUserId { get; set; }
+    }
+
+    public class RepairAssignmentFieldsDto
+    {
+        public Guid? DefaultOperationUserId { get; set; }
+        public bool DryRun { get; set; } = true;
     }
 
     public class UpdateWorkOrderStatusDto

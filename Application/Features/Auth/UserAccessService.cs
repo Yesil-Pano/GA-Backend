@@ -8,8 +8,6 @@ namespace GA.Application.Features.Auth
 {
     public class UserAccessService : IUserAccessService
     {
-        private const string SuperAdminEmail = "admin@theobuz.com";
-
         private readonly ApplicationDbContext _context;
         private readonly ICurrentUserService _currentUser;
 
@@ -170,6 +168,6 @@ namespace GA.Application.Features.Auth
         }
 
         private static bool IsSuperAdminEmail(string? email) =>
-            string.Equals(email, SuperAdminEmail, StringComparison.OrdinalIgnoreCase);
+            ProtectedSystemAccounts.IsProtectedEmail(email);
     }
 }

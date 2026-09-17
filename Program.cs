@@ -77,6 +77,7 @@ builder.Services.Configure<PeriodicWorkOrdersOptions>(
     builder.Configuration.GetSection(PeriodicWorkOrdersOptions.SectionName));
 builder.Services.AddScoped<IPeriodicScheduleService, PeriodicScheduleService>();
 builder.Services.AddScoped<IPeriodicWorkOrderService, PeriodicWorkOrderService>();
+builder.Services.AddScoped<IWorkOrderRepairService, WorkOrderRepairService>();
 builder.Services.AddHostedService<PeriodicWorkOrderHostedService>();
 
 // SignalR — gerçek zamanlı konum yayını için
@@ -195,6 +196,32 @@ if (args.Contains("--backfill-periods", StringComparer.OrdinalIgnoreCase))
     var result = await schedule.BackfillAllTemplatesAsync();
     Console.WriteLine(
         $"Backfill OK: templates={result.TemplatesProcessed}, periods={result.PeriodsCreated}, labels={result.PeriodLabelsUpdated}");
+    return;
+}
+
+if (args.Contains("--repair-periodic", StringComparer.OrdinalIgnoreCase))
+{
+    using var scope = app.Services.CreateScope();
+    var repair = scope.ServiceProvider.GetRequiredService<IWorkOrderRepairService>();
+    var result = await repair.RepairPeriodicAsync();
+    Console.WriteLine(
+        $"Repair periodic OK: templates={result.TemplatesProcessed}, periods={result.PeriodsCreated}, reset={result.FutureCompletionsReset}");
+    return;
+}
+
+if (args.Contains("--repair-assignment", StringComparer.OrdinalIgnoreCase))
+{
+    using var scope = app.Services.CreateScope();
+    var repair = scope.ServiceProvider.GetRequiredService<IWorkOrderRepairService>();
+    Guid? defaultOps = null;
+    var opsArg = args.FirstOrDefault(a => a.StartsWith("--default-operation-user=", StringComparison.OrdinalIgnoreCase));
+    if (opsArg != null && Guid.TryParse(opsArg.Split('=', 2)[1], out var parsed))
+        defaultOps = parsed;
+
+    var dryRun = !args.Contains("--apply", StringComparer.OrdinalIgnoreCase);
+    var result = await repair.RepairAssignmentFieldsAsync(defaultOps, dryRun);
+    Console.WriteLine(
+        $"Repair assignment OK: dryRun={result.DryRun}, affected={result.AffectedCount}, repaired={result.RepairedCount}");
     return;
 }
 

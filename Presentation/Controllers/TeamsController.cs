@@ -60,6 +60,7 @@ namespace GA.Presentation.Controllers
                 .Include(u => u.FieldWorkerProfile)
                     .ThenInclude(f => f!.Projects)
                 .Where(u => !u.IsDeleted && u.FieldWorkerProfile != null &&
+                            u.Email.ToLower() != ProtectedSystemAccounts.PrimarySuperAdminEmailNormalized &&
                             (isSuperAdmin ||
                              u.TenantId == tenantId))
                 .Select(u => new {
@@ -268,6 +269,9 @@ namespace GA.Presentation.Controllers
             if (user == null)
                 return NotFound(new { Message = "Güncellenmek istenen ekip üyesi bulunamadı veya yetkiniz yetersiz." });
 
+            if (ProtectedSystemAccounts.IsProtectedEmail(user.Email))
+                return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Sistem yöneticisi hesabı ekip ekranından değiştirilemez." });
+
             var normalizedEmail = dto.Email?.Trim() ?? string.Empty;
             var normalizedUsername = dto.Username?.Trim() ?? string.Empty;
 
@@ -355,6 +359,9 @@ namespace GA.Presentation.Controllers
 
             if (user == null)
                 return NotFound(new { Message = "Silinecek ekip bulunamadı veya yetkiniz yetersiz." });
+
+            if (ProtectedSystemAccounts.IsProtectedEmail(user.Email))
+                return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Sistem yöneticisi hesabı silinemez." });
 
             user.IsDeleted = true;
             user.IsActive = false;
